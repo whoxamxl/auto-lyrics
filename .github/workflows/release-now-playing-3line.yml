@@ -1,0 +1,71 @@
+name: Release Now Playing 3-Line Test
+
+on:
+  push:
+    branches:
+      - feature/now-playing-3line
+    paths:
+      - .github/workflows/release-now-playing-3line.yml
+      - app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
+
+      - name: Build debug APK
+        run: gradle assembleDebug
+
+      - name: Prepare APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
+          sha256sum dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk > dist/SHA256SUMS.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-lyrics-1.9.6-now-playing-3line-test1
+          path: |
+            dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
+            dist/SHA256SUMS.txt
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.9.6-now-playing-3line-test1
+          target_commitish: ${{ github.sha }}
+          name: Auto Lyrics 1.9.6 — Now Playing 3-Line Test 1
+          prerelease: true
+          body: |
+            Experimental build focused only on the Android Auto Now Playing screen.
+
+            Changes:
+            - Now Playing subtitle sends three fixed lyric rows: previous / current / next.
+            - Current lyric is prefixed with ▶.
+            - Browse-tree rendering is intentionally left unchanged.
+            - Translation is omitted from the synced Now Playing subtitle in this test build.
+            - Existing karaoke word highlighting for the current line is retained.
+
+            Purpose: verify how the Android Auto host renders newline-separated DISPLAY_SUBTITLE metadata on a real head unit.
+          files: |
+            dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
+            dist/SHA256SUMS.txt
