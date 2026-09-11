@@ -432,35 +432,19 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         lastKaraokeText = null
     }
 
-    private fun buildNowPlayingLyricsText(
-        state: LyricsState,
-        lineIdx: Int,
-        posMs: Long
-    ): String {
-        val previous = state.lines.getOrNull(lineIdx - 1)?.text?.ifBlank { "♪" } ?: "\u00A0"
-        val currentLine = state.lines.getOrNull(lineIdx)
-        val next = state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: "\u00A0"
-
-        val current = if (currentLine != null && aaKaraokeEnabled && currentLine.words.isNotEmpty()) {
-            buildKaraokeText(currentLine, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
-        } else {
-            currentLine?.text?.ifBlank { "♪" } ?: "♪"
-        }
-
-        return listOf(
-            previous,
-            "▶  $current",
-            next
-        ).joinToString("\n")
-    }
-
     private fun getSubtitleText(state: LyricsState): String {
         val posMs = getAaPositionMs()
 
         if (state.status == LyricsStatus.FOUND) {
             val lineIdx = findLineIndex(state.lines, posMs)
-            if (lineIdx >= 0) {
-                return buildNowPlayingLyricsText(state, lineIdx, posMs)
+            val line = state.lines.getOrNull(lineIdx)
+            if (line != null) {
+                val current = if (aaKaraokeEnabled && line.words.isNotEmpty()) {
+                    buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
+                } else {
+                    line.text.ifBlank { "♪" }
+                }
+                return "▶  $current"
             }
         }
 
@@ -483,6 +467,17 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         }
     }
 
+    private fun getDescriptionText(state: LyricsState): String {
+        if (state.status != LyricsStatus.FOUND || state.lines.isEmpty()) return ""
+
+        val posMs = getAaPositionMs()
+        val lineIdx = findLineIndex(state.lines, posMs)
+        if (lineIdx < 0) {
+            return state.lines.firstOrNull()?.text?.ifBlank { "♪" } ?: ""
+        }
+
+        return state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: ""
+    }
     // --- MediaSession management ---
 
     private fun buildBaseMetadata(state: LyricsState): MediaMetadataCompat.Builder {
@@ -504,6 +499,13 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
         }
 
+        val descriptionText = getDescriptionText(state)
+        if (descriptionText.isNotBlank()) {
+            metaBuilder.putString(
+                MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
+                descriptionText
+            )
+        }
         val art = state.albumArt ?: lastAlbumArt
         if (art != null) {
             metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
