@@ -1,4 +1,4 @@
-name: Release Now Playing 3-Line Test
+name: Release Now Playing Subtitle-Description Test
 
 on:
   push:
@@ -6,18 +6,192 @@ on:
       - feature/now-playing-3line
     paths:
       - .github/workflows/release-now-playing-3line.yml
-      - app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
+  patch-build-release:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: feature/now-playing-3line
+          fetch-depth: 0
+
+      - name: Apply Now Playing test 2 source change
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt')
+          s = path.read_text()
+
+          old = '    private var lastSubtitleText: String? = null\n    private var lastAlbumArt: Bitmap? = null'
+          new = '    private var lastSubtitleText: String? = null\n    private var lastDescriptionText: String? = null\n    private var lastAlbumArt: Bitmap? = null'
+          assert old in s, 'subtitle cache block not found'
+          s = s.replace(old, new, 1)
+
+          old = '''    private fun buildNowPlayingLyricsText(
+              state: LyricsState,
+              lineIdx: Int,
+              posMs: Long
+          ): String {
+              val previous = state.lines.getOrNull(lineIdx - 1)?.text?.ifBlank { "♪" } ?: "\\u00A0"
+              val currentLine = state.lines.getOrNull(lineIdx)
+              val next = state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: "\\u00A0"
+
+              val current = if (currentLine != null && aaKaraokeEnabled && currentLine.words.isNotEmpty()) {
+                  buildKaraokeText(currentLine, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
+              } else {
+                  currentLine?.text?.ifBlank { "♪" } ?: "♪"
+              }
+
+              return listOf(
+                  previous,
+                  "▶  $current",
+                  next
+              ).joinToString("\\n")
+          }
+
+          '''
+          assert old in s, 'test1 3-line helper not found'
+          s = s.replace(old, '', 1)
+
+          old = '''        if (state.status == LyricsStatus.FOUND) {
+              val lineIdx = findLineIndex(state.lines, posMs)
+              if (lineIdx >= 0) {
+                  return buildNowPlayingLyricsText(state, lineIdx, posMs)
+              }
+          }
+          '''
+          new = '''        if (state.status == LyricsStatus.FOUND) {
+              val lineIdx = findLineIndex(state.lines, posMs)
+              val line = state.lines.getOrNull(lineIdx)
+              if (line != null) {
+                  val current = if (aaKaraokeEnabled && line.words.isNotEmpty()) {
+                      buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
+                  } else {
+                      line.text.ifBlank { "♪" }
+                  }
+                  return "▶  $current"
+              }
+          }
+          '''
+          assert old in s, 'test1 subtitle block not found'
+          s = s.replace(old, new, 1)
+
+          marker = '    // --- MediaSession management ---\n'
+          helper = '''    private fun getDescriptionText(state: LyricsState): String {
+              if (state.status != LyricsStatus.FOUND || state.lines.isEmpty()) return ""
+
+              val posMs = getAaPositionMs()
+              val lineIdx = findLineIndex(state.lines, posMs)
+              if (lineIdx < 0) {
+                  return state.lines.firstOrNull()?.text?.ifBlank { "♪" } ?: ""
+              }
+
+              return state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: ""
+          }
+
+          ''' + marker
+          assert marker in s, 'MediaSession marker not found'
+          s = s.replace(marker, helper, 1)
+
+          old = '''            lastSubtitleText = null
+              lastAlbumArt = null'''
+          new = '''            lastSubtitleText = null
+              lastDescriptionText = null
+              lastAlbumArt = null'''
+          assert old in s, 'track-change reset block not found'
+          s = s.replace(old, new, 1)
+
+          old = '''        val subtitleText = getSubtitleText(state)
+          if (subtitleText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
+                  subtitleText
+              )
+          }
+          lastSubtitleText = subtitleText
+
+          mediaSession.setMetadata(metaBuilder.build())
+          '''
+          new = '''        val subtitleText = getSubtitleText(state)
+          if (subtitleText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
+                  subtitleText
+              )
+          }
+
+          val descriptionText = getDescriptionText(state)
+          if (descriptionText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
+                  descriptionText
+              )
+          }
+
+          lastSubtitleText = subtitleText
+          lastDescriptionText = descriptionText
+
+          mediaSession.setMetadata(metaBuilder.build())
+          '''
+          assert old in s, 'updateMediaSession metadata block not found'
+          s = s.replace(old, new, 1)
+
+          old = '''        val subtitleText = getSubtitleText(state)
+          if (subtitleText == lastSubtitleText) return
+          lastSubtitleText = subtitleText
+
+          val metaBuilder = buildBaseMetadata(state)
+          if (subtitleText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
+                  subtitleText
+              )
+          }
+          mediaSession.setMetadata(metaBuilder.build())
+          '''
+          new = '''        val subtitleText = getSubtitleText(state)
+          val descriptionText = getDescriptionText(state)
+          if (subtitleText == lastSubtitleText && descriptionText == lastDescriptionText) return
+          lastSubtitleText = subtitleText
+          lastDescriptionText = descriptionText
+
+          val metaBuilder = buildBaseMetadata(state)
+          if (subtitleText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
+                  subtitleText
+              )
+          }
+          if (descriptionText.isNotBlank()) {
+              metaBuilder.putString(
+                  MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
+                  descriptionText
+              )
+          }
+          mediaSession.setMetadata(metaBuilder.build())
+          '''
+          assert old in s, 'updateSubtitleKaraoke metadata block not found'
+          s = s.replace(old, new, 1)
+
+          path.write_text(s)
+          PY
+
+      - name: Commit test 2 source change
+        id: source_commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt
+          git commit -m "feat: use subtitle for current lyric and description for next lyric"
+          git push origin HEAD:feature/now-playing-3line
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -37,35 +211,35 @@ jobs:
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk \
-             dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
-          sha256sum dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk > dist/SHA256SUMS.txt
+             dist/auto-lyrics-1.9.6-now-playing-description-test2.apk
+          sha256sum dist/auto-lyrics-1.9.6-now-playing-description-test2.apk > dist/SHA256SUMS.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: auto-lyrics-1.9.6-now-playing-3line-test1
+          name: auto-lyrics-1.9.6-now-playing-description-test2
           path: |
-            dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
+            dist/auto-lyrics-1.9.6-now-playing-description-test2.apk
             dist/SHA256SUMS.txt
 
       - name: Create GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.9.6-now-playing-3line-test1
-          target_commitish: ${{ github.sha }}
-          name: Auto Lyrics 1.9.6 — Now Playing 3-Line Test 1
+          tag_name: v1.9.6-now-playing-description-test2
+          target_commitish: ${{ steps.source_commit.outputs.sha }}
+          name: Auto Lyrics 1.9.6 — Now Playing Description Test 2
           prerelease: true
           body: |
-            Experimental build focused only on the Android Auto Now Playing screen.
+            Experimental Android Auto Now Playing build.
 
-            Changes:
-            - Now Playing subtitle sends three fixed lyric rows: previous / current / next.
-            - Current lyric is prefixed with ▶.
-            - Browse-tree rendering is intentionally left unchanged.
-            - Translation is omitted from the synced Now Playing subtitle in this test build.
-            - Existing karaoke word highlighting for the current line is retained.
+            Now Playing metadata mapping:
+            - DISPLAY_TITLE = track title — artist (unchanged)
+            - DISPLAY_SUBTITLE = ▶ current lyric
+            - DISPLAY_DESCRIPTION = next lyric
 
-            Purpose: verify how the Android Auto host renders newline-separated DISPLAY_SUBTITLE metadata on a real head unit.
+            Browse-tree rendering is intentionally unchanged.
+
+            Purpose: verify whether the Android Auto Now Playing host renders DISPLAY_DESCRIPTION as an additional small-text line/region without sacrificing the current lyric's subtitle space.
           files: |
-            dist/auto-lyrics-1.9.6-now-playing-3line-test1.apk
+            dist/auto-lyrics-1.9.6-now-playing-description-test2.apk
             dist/SHA256SUMS.txt
