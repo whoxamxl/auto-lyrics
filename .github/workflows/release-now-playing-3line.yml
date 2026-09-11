@@ -25,41 +25,22 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt')
           s = path.read_text()
 
-          old = '    private var lastSubtitleText: String? = null\n    private var lastAlbumArt: Bitmap? = null'
-          new = '    private var lastSubtitleText: String? = null\n    private var lastDescriptionText: String? = null\n    private var lastAlbumArt: Bitmap? = null'
-          assert old in s, 'subtitle cache block not found'
-          s = s.replace(old, new, 1)
+          # Remove test 1's previous/current/next multiline subtitle helper.
+          s, count = re.subn(
+              r'\n    private fun buildNowPlayingLyricsText\(.*?\n    \}\n\n    private fun getSubtitleText',
+              '\n    private fun getSubtitleText',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          assert count == 1, 'test1 3-line helper not found'
 
-          old = '''    private fun buildNowPlayingLyricsText(
-              state: LyricsState,
-              lineIdx: Int,
-              posMs: Long
-          ): String {
-              val previous = state.lines.getOrNull(lineIdx - 1)?.text?.ifBlank { "♪" } ?: "\\u00A0"
-              val currentLine = state.lines.getOrNull(lineIdx)
-              val next = state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: "\\u00A0"
-
-              val current = if (currentLine != null && aaKaraokeEnabled && currentLine.words.isNotEmpty()) {
-                  buildKaraokeText(currentLine, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
-              } else {
-                  currentLine?.text?.ifBlank { "♪" } ?: "♪"
-              }
-
-              return listOf(
-                  previous,
-                  "▶  $current",
-                  next
-              ).joinToString("\\n")
-          }
-
-          '''
-          assert old in s, 'test1 3-line helper not found'
-          s = s.replace(old, '', 1)
-
+          # Keep only the current lyric in DISPLAY_SUBTITLE.
           old = '''        if (state.status == LyricsStatus.FOUND) {
               val lineIdx = findLineIndex(state.lines, posMs)
               if (lineIdx >= 0) {
@@ -83,6 +64,7 @@ jobs:
           assert old in s, 'test1 subtitle block not found'
           s = s.replace(old, new, 1)
 
+          # Put the next lyric in DISPLAY_DESCRIPTION.
           marker = '    // --- MediaSession management ---\n'
           helper = '''    private fun getDescriptionText(state: LyricsState): String {
               if (state.status != LyricsStatus.FOUND || state.lines.isEmpty()) return ""
@@ -100,34 +82,9 @@ jobs:
           assert marker in s, 'MediaSession marker not found'
           s = s.replace(marker, helper, 1)
 
-          old = '''            lastSubtitleText = null
-              lastAlbumArt = null'''
-          new = '''            lastSubtitleText = null
-              lastDescriptionText = null
-              lastAlbumArt = null'''
-          assert old in s, 'track-change reset block not found'
-          s = s.replace(old, new, 1)
-
-          old = '''        val subtitleText = getSubtitleText(state)
-          if (subtitleText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
-                  subtitleText
-              )
-          }
-          lastSubtitleText = subtitleText
-
-          mediaSession.setMetadata(metaBuilder.build())
+          marker = '''        val art = state.albumArt ?: lastAlbumArt
           '''
-          new = '''        val subtitleText = getSubtitleText(state)
-          if (subtitleText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
-                  subtitleText
-              )
-          }
-
-          val descriptionText = getDescriptionText(state)
+          addition = '''        val descriptionText = getDescriptionText(state)
           if (descriptionText.isNotBlank()) {
               metaBuilder.putString(
                   MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
@@ -135,50 +92,9 @@ jobs:
               )
           }
 
-          lastSubtitleText = subtitleText
-          lastDescriptionText = descriptionText
-
-          mediaSession.setMetadata(metaBuilder.build())
-          '''
-          assert old in s, 'updateMediaSession metadata block not found'
-          s = s.replace(old, new, 1)
-
-          old = '''        val subtitleText = getSubtitleText(state)
-          if (subtitleText == lastSubtitleText) return
-          lastSubtitleText = subtitleText
-
-          val metaBuilder = buildBaseMetadata(state)
-          if (subtitleText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
-                  subtitleText
-              )
-          }
-          mediaSession.setMetadata(metaBuilder.build())
-          '''
-          new = '''        val subtitleText = getSubtitleText(state)
-          val descriptionText = getDescriptionText(state)
-          if (subtitleText == lastSubtitleText && descriptionText == lastDescriptionText) return
-          lastSubtitleText = subtitleText
-          lastDescriptionText = descriptionText
-
-          val metaBuilder = buildBaseMetadata(state)
-          if (subtitleText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
-                  subtitleText
-              )
-          }
-          if (descriptionText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
-                  descriptionText
-              )
-          }
-          mediaSession.setMetadata(metaBuilder.build())
-          '''
-          assert old in s, 'updateSubtitleKaraoke metadata block not found'
-          s = s.replace(old, new, 1)
+          ''' + marker
+          assert marker in s, 'album-art marker not found'
+          s = s.replace(marker, addition, 1)
 
           path.write_text(s)
           PY
@@ -189,7 +105,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt
-          git commit -m "feat: use subtitle for current lyric and description for next lyric"
+          git commit -m "feat: show current lyric as subtitle and next lyric as description"
           git push origin HEAD:feature/now-playing-3line
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
