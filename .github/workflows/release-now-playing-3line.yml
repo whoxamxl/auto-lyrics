@@ -41,60 +41,65 @@ jobs:
           assert count == 1, 'test1 3-line helper not found'
 
           # Keep only the current lyric in DISPLAY_SUBTITLE.
-          old = '''        if (state.status == LyricsStatus.FOUND) {
-              val lineIdx = findLineIndex(state.lines, posMs)
-              if (lineIdx >= 0) {
-                  return buildNowPlayingLyricsText(state, lineIdx, posMs)
-              }
-          }
-          '''
-          new = '''        if (state.status == LyricsStatus.FOUND) {
-              val lineIdx = findLineIndex(state.lines, posMs)
-              val line = state.lines.getOrNull(lineIdx)
-              if (line != null) {
-                  val current = if (aaKaraokeEnabled && line.words.isNotEmpty()) {
-                      buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
-                  } else {
-                      line.text.ifBlank { "♪" }
-                  }
-                  return "▶  $current"
-              }
-          }
-          '''
-          assert old in s, 'test1 subtitle block not found'
-          s = s.replace(old, new, 1)
+          pattern = re.compile(
+              r'^        if \(state\.status == LyricsStatus\.FOUND\) \{\n'
+              r'^\s+val lineIdx = findLineIndex\(state\.lines, posMs\)\n'
+              r'^\s+if \(lineIdx >= 0\) \{\n'
+              r'^\s+return buildNowPlayingLyricsText\(state, lineIdx, posMs\)\n'
+              r'^\s+\}\n'
+              r'^        \}\n',
+              re.M,
+          )
+          replacement = '\n'.join([
+              '        if (state.status == LyricsStatus.FOUND) {',
+              '            val lineIdx = findLineIndex(state.lines, posMs)',
+              '            val line = state.lines.getOrNull(lineIdx)',
+              '            if (line != null) {',
+              '                val current = if (aaKaraokeEnabled && line.words.isNotEmpty()) {',
+              '                    buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)',
+              '                } else {',
+              '                    line.text.ifBlank { "♪" }',
+              '                }',
+              '                return "▶  $current"',
+              '            }',
+              '        }',
+              '',
+          ])
+          s, count = pattern.subn(replacement, s, count=1)
+          assert count == 1, 'test1 subtitle block not found'
 
           # Put the next lyric in DISPLAY_DESCRIPTION.
           marker = '    // --- MediaSession management ---\n'
-          helper = '''    private fun getDescriptionText(state: LyricsState): String {
-              if (state.status != LyricsStatus.FOUND || state.lines.isEmpty()) return ""
-
-              val posMs = getAaPositionMs()
-              val lineIdx = findLineIndex(state.lines, posMs)
-              if (lineIdx < 0) {
-                  return state.lines.firstOrNull()?.text?.ifBlank { "♪" } ?: ""
-              }
-
-              return state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: ""
-          }
-
-          ''' + marker
+          helper = '\n'.join([
+              '    private fun getDescriptionText(state: LyricsState): String {',
+              '        if (state.status != LyricsStatus.FOUND || state.lines.isEmpty()) return ""',
+              '',
+              '        val posMs = getAaPositionMs()',
+              '        val lineIdx = findLineIndex(state.lines, posMs)',
+              '        if (lineIdx < 0) {',
+              '            return state.lines.firstOrNull()?.text?.ifBlank { "♪" } ?: ""',
+              '        }',
+              '',
+              '        return state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: ""',
+              '    }',
+              '',
+          ]) + marker
           assert marker in s, 'MediaSession marker not found'
           s = s.replace(marker, helper, 1)
 
-          marker = '''        val art = state.albumArt ?: lastAlbumArt
-          '''
-          addition = '''        val descriptionText = getDescriptionText(state)
-          if (descriptionText.isNotBlank()) {
-              metaBuilder.putString(
-                  MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,
-                  descriptionText
-              )
-          }
-
-          ''' + marker
-          assert marker in s, 'album-art marker not found'
-          s = s.replace(marker, addition, 1)
+          art_marker = '        val art = state.albumArt ?: lastAlbumArt\n'
+          addition = '\n'.join([
+              '        val descriptionText = getDescriptionText(state)',
+              '        if (descriptionText.isNotBlank()) {',
+              '            metaBuilder.putString(',
+              '                MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION,',
+              '                descriptionText',
+              '            )',
+              '        }',
+              '',
+          ]) + art_marker
+          assert art_marker in s, 'album-art marker not found'
+          s = s.replace(art_marker, addition, 1)
 
           path.write_text(s)
           PY
