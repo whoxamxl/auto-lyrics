@@ -432,20 +432,35 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         lastKaraokeText = null
     }
 
+    private fun buildNowPlayingLyricsText(
+        state: LyricsState,
+        lineIdx: Int,
+        posMs: Long
+    ): String {
+        val previous = state.lines.getOrNull(lineIdx - 1)?.text?.ifBlank { "♪" } ?: "\u00A0"
+        val currentLine = state.lines.getOrNull(lineIdx)
+        val next = state.lines.getOrNull(lineIdx + 1)?.text?.ifBlank { "♪" } ?: "\u00A0"
+
+        val current = if (currentLine != null && aaKaraokeEnabled && currentLine.words.isNotEmpty()) {
+            buildKaraokeText(currentLine, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
+        } else {
+            currentLine?.text?.ifBlank { "♪" } ?: "♪"
+        }
+
+        return listOf(
+            previous,
+            "▶  $current",
+            next
+        ).joinToString("\n")
+    }
+
     private fun getSubtitleText(state: LyricsState): String {
         val posMs = getAaPositionMs()
 
         if (state.status == LyricsStatus.FOUND) {
             val lineIdx = findLineIndex(state.lines, posMs)
-            val line = state.lines.getOrNull(lineIdx)
-            if (line != null) {
-                val original = if (aaKaraokeEnabled && line.words.isNotEmpty()) {
-                    buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
-                } else {
-                    line.text
-                }
-                val trans = state.translatedLines?.getOrNull(lineIdx)?.takeIf { it.isNotBlank() }
-                return if (trans != null) "$original\n$trans" else original
+            if (lineIdx >= 0) {
+                return buildNowPlayingLyricsText(state, lineIdx, posMs)
             }
         }
 
