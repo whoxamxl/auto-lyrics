@@ -1,0 +1,120 @@
+name: Build LRCLIB Provider Label Test 3
+
+on:
+  push:
+    branches:
+      - feature/lrc-source-improvements
+    paths:
+      - .github/workflows/lrclib-provider-label-test3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/lrc-source-improvements
+          fetch-depth: 0
+
+      - name: Patch provider label refresh
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt")
+          text = path.read_text()
+
+          old = '''    private var displayedStatus: LyricsStatus? = null\n    private var displayedTrackTitle: String? = null\n    private var lastSubtitleText: String? = null'''
+          new = '''    private var displayedStatus: LyricsStatus? = null\n    private var displayedTrackTitle: String? = null\n    private var displayedSource: String? = null\n    private var lastSubtitleText: String? = null'''
+          if old not in text:
+              raise SystemExit("displayedSource insertion point not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    private fun lyricsTypeLabel(state: LyricsState): String {\n        val provider = when {\n            state.source.startsWith("SyncLRC", ignoreCase = true) -> "SyncLRC"\n            state.source.startsWith("LRCLIB", ignoreCase = true) -> "LRCLIB"\n            else -> ""\n        }\n        val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""\n        val lang = state.detectedLanguage?.uppercase()\n        val langSuffix = if (lang != null) " · $lang" else ""\n\n        return when (state.status) {\n            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$langSuffix"\n            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$langSuffix"\n            else -> "⟳ Sync"\n        }\n    }'''
+          new = '''    private fun lyricsTypeLabel(state: LyricsState): String {\n        val provider = state.source\n            .substringBefore("·")\n            .substringBefore("(")\n            .trim()\n            .ifBlank {\n                // LRCLIB is currently the only lyrics source. Keep the provider\n                // visible even during a transient/cached state with an empty source.\n                if (state.status == LyricsStatus.FOUND || state.status == LyricsStatus.PLAIN_ONLY) {\n                    "LRCLIB"\n                } else {\n                    ""\n                }\n            }\n        val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""\n        val lang = state.detectedLanguage?.uppercase()\n        val langSuffix = if (lang != null) " · $lang" else ""\n\n        return when (state.status) {\n            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$langSuffix"\n            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$langSuffix"\n            else -> "⟳ Sync"\n        }\n    }'''
+          if old not in text:
+              raise SystemExit("lyricsTypeLabel block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        displayedCurrentIdx = -1\n        lastNotifyTime = 0L\n        resetKaraokeState()'''
+          new = '''        displayedCurrentIdx = -1\n        displayedSource = null\n        lastNotifyTime = 0L\n        resetKaraokeState()'''
+          if old not in text:
+              raise SystemExit("forceRefresh block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        val statusChanged = state.status != displayedStatus\n        val trackChanged = state.track?.title != displayedTrackTitle'''
+          new = '''        val statusChanged = state.status != displayedStatus\n        val trackChanged = state.track?.title != displayedTrackTitle\n        val sourceChanged = state.source != displayedSource'''
+          if old not in text:
+              raise SystemExit("throttledNotify header not found")
+          text = text.replace(old, new, 1)
+
+          old = '''            displayedStatus = state.status\n            displayedTrackTitle = state.track?.title\n            lastNotifyTime = System.currentTimeMillis()'''
+          new = '''            displayedStatus = state.status\n            displayedTrackTitle = state.track?.title\n            displayedSource = state.source\n            lastNotifyTime = System.currentTimeMillis()'''
+          if old not in text:
+              raise SystemExit("trackChanged state block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        if (!windowChanged && !lineChanged && !statusChanged && !karaokeActive) return\n\n        displayedWindowStart = win.start\n        displayedWindowEnd = win.end\n        displayedCurrentIdx = win.currentIdx\n        displayedStatus = state.status'''
+          new = '''        if (!windowChanged && !lineChanged && !statusChanged && !sourceChanged && !karaokeActive) return\n\n        displayedWindowStart = win.start\n        displayedWindowEnd = win.end\n        displayedCurrentIdx = win.currentIdx\n        displayedStatus = state.status\n        displayedSource = state.source'''
+          if old not in text:
+              raise SystemExit("refresh condition block not found")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit source change
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt
+          git commit -m "Show lyrics provider in Android Auto header"
+          git push origin HEAD:feature/lrc-source-improvements
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
+
+      - name: Build debug APK
+        run: gradle assembleDebug
+
+      - name: Prepare APK
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             app/build/outputs/apk/debug/auto-lyrics-1.9.6-lrclib-search-test3.apk
+          sha256sum app/build/outputs/apk/debug/auto-lyrics-1.9.6-lrclib-search-test3.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-lyrics-1.9.6-lrclib-search-test3
+          path: app/build/outputs/apk/debug/auto-lyrics-1.9.6-lrclib-search-test3.apk
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.9.6-lrclib-search-test3"
+          SHA="${{ steps.commit.outputs.sha }}"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          git tag -f "$TAG" "$SHA"
+          git push origin -f "$TAG"
+          gh release create "$TAG" \
+            app/build/outputs/apk/debug/auto-lyrics-1.9.6-lrclib-search-test3.apk \
+            --target "$SHA" \
+            --title "Auto Lyrics 1.9.6 — LRCLIB Search Test 3" \
+            --prerelease \
+            --notes "Show the selected lyrics provider in the Android Auto Browse header (for example: Synced · LRCLIB) and refresh the Browse tree when the provider/source changes. Includes the LRCLIB search-accuracy improvements from Test 2."
