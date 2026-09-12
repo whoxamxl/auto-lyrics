@@ -71,4 +71,7 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Unit tests for lyric candidate matching heuristics
+    testImplementation("junit:junit:4.13.2")
 }
