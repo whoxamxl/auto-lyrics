@@ -30,7 +30,7 @@ object PetitLyricsClient {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    internal data class PetitLyricsResult(
+    data class PetitLyricsResult(
         val lyricsType: Int,
         val lines: List<LyricLine>
     )
