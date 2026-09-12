@@ -3,9 +3,42 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+fun loadDotEnv(file: java.io.File): Map<String, String> {
+    if (!file.exists()) return emptyMap()
+
+    return file.readLines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+        .associate { line ->
+            val (key, rawValue) = line.split('=', limit = 2)
+            val value = rawValue.trim()
+                .removeSurrounding("\"")
+                .removeSurrounding("'")
+            key.trim() to value
+        }
+}
+
+val dotEnv = loadDotEnv(rootProject.file(".env"))
+
+fun providerConfig(name: String): String {
+    return System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: dotEnv[name].orEmpty()
+}
+
+fun buildConfigString(value: String): String {
+    val escaped = value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+    return "\"$escaped\""
+}
+
 android {
     namespace = "com.autolyrics"
     compileSdk = 34
+
+    buildFeatures {
+        buildConfig = true
+    }
 
     defaultConfig {
         applicationId = "com.autolyrics"
@@ -13,6 +46,27 @@ android {
         targetSdk = 34
         versionCode = 31
         versionName = "1.9.7"
+
+        buildConfigField(
+            "String",
+            "PETITLYRICS_USER_ID",
+            buildConfigString(providerConfig("PETITLYRICS_USER_ID"))
+        )
+        buildConfigField(
+            "String",
+            "PETITLYRICS_APP_NAME",
+            buildConfigString(providerConfig("PETITLYRICS_APP_NAME"))
+        )
+        buildConfigField(
+            "String",
+            "PETITLYRICS_PKG_NAME",
+            buildConfigString(providerConfig("PETITLYRICS_PKG_NAME"))
+        )
+        buildConfigField(
+            "String",
+            "PETITLYRICS_CLIENT_APP_ID",
+            buildConfigString(providerConfig("PETITLYRICS_CLIENT_APP_ID"))
+        )
     }
 
     signingConfigs {
@@ -72,6 +126,6 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Unit tests for lyric candidate matching heuristics
+    // Unit tests for lyric candidate matching heuristics and provider parsers
     testImplementation("junit:junit:4.13.2")
 }
