@@ -14,10 +14,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      PETITLYRICS_USER_ID: ${{ secrets.PETITLYRICS_USER_ID }}
-      PETITLYRICS_APP_NAME: ${{ secrets.PETITLYRICS_APP_NAME }}
-      PETITLYRICS_PKG_NAME: ${{ secrets.PETITLYRICS_PKG_NAME }}
-      PETITLYRICS_CLIENT_APP_ID: ${{ secrets.PETITLYRICS_CLIENT_APP_ID }}
+      # Keep provider identifiers out of ordinary PR/main artifacts. They are
+      # injected only into version-tagged release builds.
+      PETITLYRICS_USER_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_USER_ID || '' }}
+      PETITLYRICS_APP_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_APP_NAME || '' }}
+      PETITLYRICS_PKG_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_PKG_NAME || '' }}
+      PETITLYRICS_CLIENT_APP_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_CLIENT_APP_ID || '' }}
 
     steps:
       - uses: actions/checkout@v4
