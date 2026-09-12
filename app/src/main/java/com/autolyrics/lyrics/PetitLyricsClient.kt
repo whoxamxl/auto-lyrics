@@ -86,7 +86,7 @@ object PetitLyricsClient {
 
         return try {
             client.newCall(request).execute().use { response ->
-                debugLog("HTTP ${response.code}")
+                debugLog("HTTP ${response.code}; contentType=${response.header("Content-Type").orEmpty()}")
                 if (!response.isSuccessful) {
                     debugLog("request rejected by HTTP layer")
                     return@use null
@@ -94,6 +94,11 @@ object PetitLyricsClient {
 
                 val xml = response.body?.string().orEmpty()
                 debugLog("response bytes=${xml.toByteArray(Charsets.UTF_8).size}; ${responseSummary(xml)}")
+
+                val parseError = xmlParseError(xml)
+                if (parseError != null) {
+                    debugLog("outer XML parse error: $parseError")
+                }
 
                 val result = parseApiResponse(xml)
                 if (result == null) {
@@ -186,22 +191,35 @@ object PetitLyricsClient {
         return "status=$status, matchedCount=$matched, returnedCount=$returned, songs=$songs, lyricsType=$lyricsType"
     }
 
+    private fun xmlParseError(xml: String): String? {
+        if (xml.isBlank()) return "empty response"
+        return try {
+            newDocumentBuilder().parse(
+                ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8))
+            )
+            null
+        } catch (e: Exception) {
+            "${e.javaClass.simpleName}: ${e.message.orEmpty()}"
+        }
+    }
+
     private fun debugLog(message: String) {
         if (BuildConfig.DEBUG) {
             Log.d(TAG, message)
         }
     }
 
+    private fun newDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
+        isNamespaceAware = false
+        isXIncludeAware = false
+        isExpandEntityReferences = false
+        runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+    }.newDocumentBuilder()
+
     private fun parseXml(xml: String) = try {
-        val factory = DocumentBuilderFactory.newInstance().apply {
-            isNamespaceAware = false
-            isXIncludeAware = false
-            isExpandEntityReferences = false
-            runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
-            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
-            runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
-        }
-        factory.newDocumentBuilder().parse(
+        newDocumentBuilder().parse(
             ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8))
         )
     } catch (_: Exception) {
