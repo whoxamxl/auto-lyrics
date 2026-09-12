@@ -13,6 +13,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      PETITLYRICS_USER_ID: ${{ secrets.PETITLYRICS_USER_ID }}
+      PETITLYRICS_APP_NAME: ${{ secrets.PETITLYRICS_APP_NAME }}
+      PETITLYRICS_PKG_NAME: ${{ secrets.PETITLYRICS_PKG_NAME }}
+      PETITLYRICS_CLIENT_APP_ID: ${{ secrets.PETITLYRICS_CLIENT_APP_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +32,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.4'
+
+      - name: Run unit tests
+        run: gradle testDebugUnitTest
 
       - name: Build debug APK
         run: gradle assembleDebug
