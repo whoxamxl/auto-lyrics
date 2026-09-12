@@ -95,7 +95,7 @@ class LyricsCache(context: Context) {
     }
 
     private fun cacheFile(title: String, artist: String): File {
-        val key = "v2|${title.lowercase().trim()}|${artist.lowercase().trim()}"
+        val key = "v3|${title.lowercase().trim()}|${artist.lowercase().trim()}"
         val hash = key.hashCode().toUInt().toString(16)
         return File(cacheDir, "$hash.json")
     }
