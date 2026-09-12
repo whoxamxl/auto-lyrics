@@ -1,5 +1,6 @@
 package com.autolyrics.lyrics
 
+import android.util.Log
 import com.autolyrics.BuildConfig
 import com.autolyrics.model.LyricLine
 import okhttp3.FormBody
@@ -22,6 +23,7 @@ import javax.xml.parsers.DocumentBuilderFactory
  */
 object PetitLyricsClient {
 
+    private const val TAG = "PetitLyrics"
     private const val ENDPOINT = "https://on.petitlyrics.com/api/GetPetitLyricsData.php"
     private const val SDK_VERSION = "1.3.4"
 
@@ -46,7 +48,14 @@ object PetitLyricsClient {
         artist: String,
         title: String
     ): PetitLyricsResult? {
-        if (!isConfigured || title.isBlank()) return null
+        if (!isConfigured) {
+            debugLog("provider skipped: configuration is incomplete")
+            return null
+        }
+        if (title.isBlank()) {
+            debugLog("provider skipped: title is blank")
+            return null
+        }
 
         val body = FormBody.Builder()
             .add("lyricsType", "3")
@@ -73,13 +82,29 @@ object PetitLyricsClient {
             .header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
             .build()
 
+        debugLog("request started")
+
         return try {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use null
+                debugLog("HTTP ${response.code}")
+                if (!response.isSuccessful) {
+                    debugLog("request rejected by HTTP layer")
+                    return@use null
+                }
+
                 val xml = response.body?.string().orEmpty()
-                parseApiResponse(xml)
+                debugLog("response bytes=${xml.toByteArray(Charsets.UTF_8).size}; ${responseSummary(xml)}")
+
+                val result = parseApiResponse(xml)
+                if (result == null) {
+                    debugLog("response not usable (no type-3 synced payload)")
+                } else {
+                    debugLog("accepted lyricsType=${result.lyricsType}, lines=${result.lines.size}")
+                }
+                result
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            debugLog("request failed: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
             null
         }
     }
@@ -136,6 +161,35 @@ object PetitLyricsClient {
         return lines
             .sortedBy { it.timeMs }
             .distinctBy { it.timeMs to it.text }
+    }
+
+    private fun responseSummary(xml: String): String {
+        val document = parseXml(xml) ?: return "XML=invalid"
+
+        fun firstText(vararg names: String): String? {
+            for (name in names) {
+                val nodes = document.getElementsByTagName(name)
+                if (nodes.length > 0) {
+                    val value = nodes.item(0)?.textContent?.trim()
+                    if (!value.isNullOrBlank()) return value
+                }
+            }
+            return null
+        }
+
+        val status = firstText("status", "statusCode", "resultCode") ?: "?"
+        val matched = firstText("matchedCount") ?: "?"
+        val returned = firstText("returnedCount") ?: "?"
+        val lyricsType = firstText("lyricsType") ?: "?"
+        val songs = document.getElementsByTagName("song").length
+
+        return "status=$status, matchedCount=$matched, returnedCount=$returned, songs=$songs, lyricsType=$lyricsType"
+    }
+
+    private fun debugLog(message: String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, message)
+        }
     }
 
     private fun parseXml(xml: String) = try {
