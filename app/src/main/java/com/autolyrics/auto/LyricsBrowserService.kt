@@ -34,6 +34,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     private var displayedCurrentIdx = -1
     private var displayedStatus: LyricsStatus? = null
     private var displayedTrackTitle: String? = null
+    private var displayedSource: String? = null
     private var lastSubtitleText: String? = null
     private var lastAlbumArt: Bitmap? = null
 
@@ -356,11 +357,19 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     }
 
     private fun lyricsTypeLabel(state: LyricsState): String {
-        val provider = when {
-            state.source.startsWith("SyncLRC", ignoreCase = true) -> "SyncLRC"
-            state.source.startsWith("LRCLIB", ignoreCase = true) -> "LRCLIB"
-            else -> ""
-        }
+        val provider = state.source
+            .substringBefore("·")
+            .substringBefore("(")
+            .trim()
+            .ifBlank {
+                // LRCLIB is currently the only lyrics source. Keep the provider
+                // visible even during a transient/cached state with an empty source.
+                if (state.status == LyricsStatus.FOUND || state.status == LyricsStatus.PLAIN_ONLY) {
+                    "LRCLIB"
+                } else {
+                    ""
+                }
+            }
         val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""
         val lang = state.detectedLanguage?.uppercase()
         val langSuffix = if (lang != null) " · $lang" else ""
@@ -609,6 +618,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         displayedWindowStart = -1
         displayedWindowEnd = -1
         displayedCurrentIdx = -1
+        displayedSource = null
         lastNotifyTime = 0L
         resetKaraokeState()
         notifyChildrenChanged(ROOT_ID)
@@ -618,6 +628,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     private fun throttledNotifyChildren(state: LyricsState) {
         val statusChanged = state.status != displayedStatus
         val trackChanged = state.track?.title != displayedTrackTitle
+        val sourceChanged = state.source != displayedSource
 
         if (trackChanged) {
             displayedWindowStart = -1
@@ -625,6 +636,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             displayedCurrentIdx = -1
             displayedStatus = state.status
             displayedTrackTitle = state.track?.title
+            displayedSource = state.source
             lastNotifyTime = System.currentTimeMillis()
             handler.removeCallbacksAndMessages(null)
             pendingNotify = false
@@ -640,12 +652,13 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val karaokeActive = aaKaraokeEnabled && state.status == LyricsStatus.FOUND
             && state.lines.getOrNull(state.currentIndex)?.words?.isNotEmpty() == true
 
-        if (!windowChanged && !lineChanged && !statusChanged && !karaokeActive) return
+        if (!windowChanged && !lineChanged && !statusChanged && !sourceChanged && !karaokeActive) return
 
         displayedWindowStart = win.start
         displayedWindowEnd = win.end
         displayedCurrentIdx = win.currentIdx
         displayedStatus = state.status
+        displayedSource = state.source
 
         val now = System.currentTimeMillis()
         val elapsed = now - lastNotifyTime
