@@ -14,6 +14,7 @@ import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
+import com.autolyrics.lyrics.PetitLyricsClient
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -328,7 +329,39 @@ class MediaTracker private constructor(context: Context) {
     )
 
     private fun fetchBestLyrics(track: TrackInfo): FetchResult? {
-        return fetchFromLrcLib(track)
+        // LRCLIB remains the primary source when it has a synchronized result.
+        // PetitLyrics is queried only when LRCLIB has no acceptable synced
+        // lyrics, allowing a PetitLyrics synced result to beat LRCLIB plain text.
+        val lrcLibResult = fetchFromLrcLib(track)
+        if (lrcLibResult?.status == LyricsStatus.FOUND) return lrcLibResult
+
+        val petitLyricsResult = fetchFromPetitLyrics(track)
+        if (petitLyricsResult != null) return petitLyricsResult
+
+        return lrcLibResult
+    }
+
+    private fun fetchFromPetitLyrics(track: TrackInfo): FetchResult? {
+        if (!PetitLyricsClient.isConfigured || track.artist.isBlank()) return null
+
+        val result = try {
+            PetitLyricsClient.getSyncedLyrics(
+                album = track.album,
+                artist = track.artist,
+                title = track.title
+            )
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
+        if (!hasRealText) return null
+
+        return FetchResult(
+            lines = result.lines,
+            status = LyricsStatus.FOUND,
+            source = "PetitLyrics · Synced"
+        )
     }
 
     private fun fetchFromLrcLib(track: TrackInfo): FetchResult? {
