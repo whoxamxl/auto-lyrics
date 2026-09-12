@@ -209,14 +209,20 @@ object PetitLyricsClient {
         }
     }
 
-    private fun newDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = false
-        isXIncludeAware = false
-        isExpandEntityReferences = false
-        runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
-        runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
-        runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
-    }.newDocumentBuilder()
+    private fun newDocumentBuilder() = DocumentBuilderFactory.newInstance().let { factory ->
+        // Android's bundled JAXP implementation does not support every optional
+        // DocumentBuilderFactory property. In particular, setXIncludeAware(false)
+        // can throw UnsupportedOperationException before parsing even starts.
+        // Apply hardening/configuration opportunistically instead of making an
+        // unsupported optional feature fatal to otherwise valid PetitLyrics XML.
+        runCatching { factory.isNamespaceAware = false }
+        runCatching { factory.isXIncludeAware = false }
+        runCatching { factory.isExpandEntityReferences = false }
+        runCatching { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+        factory.newDocumentBuilder()
+    }
 
     private fun parseXml(xml: String) = try {
         newDocumentBuilder().parse(
