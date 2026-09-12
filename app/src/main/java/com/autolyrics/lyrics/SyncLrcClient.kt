@@ -27,7 +27,6 @@ object SyncLrcClient {
     )
 
     enum class LyricsType(val value: String) {
-        KARAOKE("karaoke"),
         SYNCED("synced"),
         PLAIN("plain")
     }

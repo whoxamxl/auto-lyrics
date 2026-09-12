@@ -356,14 +356,18 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     }
 
     private fun lyricsTypeLabel(state: LyricsState): String {
+        val provider = when {
+            state.source.startsWith("SyncLRC", ignoreCase = true) -> "SyncLRC"
+            state.source.startsWith("LRCLIB", ignoreCase = true) -> "LRCLIB"
+            else -> ""
+        }
+        val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""
         val lang = state.detectedLanguage?.uppercase()
-        val suffix = if (lang != null) " · $lang" else ""
+        val langSuffix = if (lang != null) " · $lang" else ""
+
         return when (state.status) {
-            LyricsStatus.FOUND -> {
-                val hasKaraoke = state.lines.any { it.words.isNotEmpty() }
-                if (hasKaraoke && aaKaraokeEnabled) "⟳ Karaoke$suffix" else "⟳ Synced$suffix"
-            }
-            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$suffix"
+            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$langSuffix"
+            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$langSuffix"
             else -> "⟳ Sync"
         }
     }
