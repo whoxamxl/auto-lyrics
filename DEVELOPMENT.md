@@ -4,119 +4,144 @@
 
 | Term | Meaning |
 |---|---|
-| **Full lyrics view** (AA) | The scrollable browse-tree list of lyric lines on Android Auto, powered by `onLoadChildren()`. Shows a windowed subset of lines. |
-| **Fast-updating screen** / **Now-playing card** (AA) | The Android Auto now-playing card. Displays title, artist, album art, and a subtitle (current lyric) via `MediaMetadataCompat`. Updated every 300ms. |
-| **Small fast-updating screen** | The now-playing card when AA is in the *minimized* container (e.g. maps in the larger panel). |
-| **Large fast-updating screen** | The now-playing card when it fills the larger AA container. |
-| **Performance Mode** (Phone) | A separate full-screen immersive activity with large karaoke text and word pop-out. |
-| **Karaoke** | Word-level timestamps (ELRC format). On the phone, the current word is highlighted; on AA, shown via bracket notation `【word】`. |
-| **Synced lyrics** | Line-level timestamps (standard LRC). `LyricsStatus.FOUND`. |
-| **Plain lyrics** / **Unsynced** | No timestamps. `LyricsStatus.PLAIN_ONLY`. Scrolled proportionally based on song duration. |
-| **SyncLRC** | Primary lyrics API: `synclrc.tharuk.pro`. Provides karaoke, synced, and plain lyrics. |
-| **LRCLIB** | Fallback lyrics API: `lrclib.net`. Provides synced and plain lyrics. |
-| **AA offset** | A separate lyrics delay setting specific to Android Auto, stored as `aa_offset_ms` in SharedPreferences. |
-| **Phone sync** | The global lyrics offset applied on the phone, managed by `MediaTracker.offsetMs`. |
+| **Lyrics Browse View** (AA) | Android Auto browse-tree view backed by `onLoadChildren()`. Shows a window around the current lyric line. |
+| **Now-playing card** (AA) | Standard Android Auto media now-playing card rendered from `MediaMetadataCompat`. |
+| **Synced lyrics** | Line-level timestamps. `LyricsStatus.FOUND`. |
+| **Plain lyrics** / **Unsynced** | Lyrics without timestamps. `LyricsStatus.PLAIN_ONLY`. |
+| **LRCLIB** | Primary lyrics source. Auto Lyrics performs local candidate scoring instead of blindly trusting result order. |
+| **PetitLyrics** | Optional fallback provider for synced lyrics when LRCLIB has no acceptable synced result. |
+| **AA offset** | Android Auto-specific lyrics delay stored as `aa_offset_ms`. |
+| **Phone sync** | Global lyrics offset managed by `MediaTracker.offsetMs`. |
 
 ## Architecture
 
-```
-AutoLyricsApp (Application)
-  └─ MediaTracker (singleton) — playback tracking, lyrics fetching, state emission
-       ├─ MediaListenerService (NotificationListenerService) — intercepts media notifications
-       ├─ SyncLrcClient / LrcLibClient — lyrics API clients
-       ├─ LrcParser — LRC/ELRC parsing
-       ├─ MetadataCleaner — cleans track metadata for API queries
-       ├─ LyricsCache — in-memory + background refresh + queue pre-fetch
-       └─ AlbumColorExtractor — Palette API color extraction
+```text
+AutoLyricsApp
+  └─ MediaTracker
+       ├─ MediaListenerService
+       ├─ LrcLibClient
+       ├─ PetitLyricsClient (optional, configured at build time)
+       ├─ LrcParser
+       ├─ MetadataCleaner
+       ├─ LyricsCache
+       └─ AlbumColorExtractor
 
   Phone UI
-  ├─ MainActivity — main lyrics view, settings, sync tools
-  └─ PerformanceActivity — full-screen immersive karaoke view
+  ├─ MainActivity
+  └─ PerformanceActivity
 
   Android Auto
-  ├─ LyricsBrowserService (MediaBrowserServiceCompat)
-  │   ├─ Browse tree (onLoadChildren) — flat single-level: track header + windowed lyrics + sync controls
-  │   ├─ MediaSession — metadata (title, art, subtitle), playback state
-  │   ├─ Karaoke bracket builder — buildKaraokeText()
-  │   └─ Transport controls proxy — forwards play/pause/seek to source player
-  └─ BootReceiver — starts service on boot/package replace
+  ├─ LyricsBrowserService
+  │   ├─ Browse tree
+  │   ├─ MediaSession
+  │   └─ Transport controls proxy
+  └─ BootReceiver
 ```
-
-## File Map
-
-### Kotlin Sources (`app/src/main/java/com/autolyrics/`)
-
-| File | Purpose |
-|---|---|
-| `AutoLyricsApp.kt` | Application class. Initializes `MediaTracker`, starts `LyricsBrowserService`. |
-| `MainActivity.kt` | Phone UI: lyrics display, font/delay settings, tap-to-sync, audio sync, scroll handling, theme colors. |
-| `PerformanceActivity.kt` | Full-screen immersive karaoke mode with large text and word pop-out effect. |
-| `model/Models.kt` | Data classes: `TrackInfo`, `LyricWord`, `LyricLine`, `AlbumColors`, `LyricsStatus`, `LyricsState`. |
-| `media/MediaTracker.kt` | Singleton. Tracks active media session, fetches lyrics, manages offset, emits `StateFlow<LyricsState>`. |
-| `media/MediaListenerService.kt` | `NotificationListenerService` — detects media sessions. |
-| `lyrics/SyncLrcClient.kt` | HTTP client for SyncLRC API (primary source). |
-| `lyrics/LrcLibClient.kt` | HTTP client for LRCLIB API (fallback source). |
-| `lyrics/LrcParser.kt` | Parses LRC and ELRC format strings into `LyricLine` lists. |
-| `lyrics/MetadataCleaner.kt` | Normalizes track/artist strings for API queries. |
-| `lyrics/LyricsCache.kt` | In-memory lyrics cache with background refresh and queue pre-fetching. |
-| `util/AlbumColorExtractor.kt` | Extracts `AlbumColors` from album art bitmaps using AndroidX Palette. |
-| `util/AudioSyncHelper.kt` | Audio-based auto-sync using `SpeechRecognizer`. Calculates offset from recognized speech. |
-| `auto/LyricsBrowserService.kt` | Android Auto integration. Browse tree, MediaSession metadata/playback, karaoke brackets, transport proxy. |
-| `auto/BootReceiver.kt` | Starts `LyricsBrowserService` on `BOOT_COMPLETED` and `MY_PACKAGE_REPLACED`. |
-
-### Resources (`app/src/main/res/`)
-
-| File | Purpose |
-|---|---|
-| `layout/activity_main.xml` | Phone main UI layout. |
-| `layout/activity_performance.xml` | Full-screen performance mode layout. |
-| `xml/automotive_app_desc.xml` | Android Auto app descriptor. |
-| `values/themes.xml` | App theme (Material dark, no action bar). |
-| `values/colors.xml` | Color resources. |
-| `values/strings.xml` | String resources. |
-| `drawable/` | Icons, backgrounds, shapes. |
-
-### Key Configuration
-
-| File | Purpose |
-|---|---|
-| `app/build.gradle.kts` | Dependencies, SDK versions, signing config, version management. |
-| `AndroidManifest.xml` | Components, permissions, AA metadata. |
-| `.github/workflows/build.yml` | CI: build APK, create GitHub release with versioned filename. |
-| `app/signing.p12` | Shared signing keystore (avoids version conflicts across CI runs). |
-
-## Key Constants (`LyricsBrowserService`)
-
-| Constant | Value | Purpose |
-|---|---|---|
-| `WINDOW_SIZE` | 3 | Number of synced lyric lines in the AA browse tree window. |
-| `PLAIN_WINDOW_SIZE` | 4 | Number of unsynced lyric lines in the AA browse tree window. |
-| `PAD_WIDTH` | 60 | Character padding for browse tree items (reduces choppiness). |
-| `NOTIFY_THROTTLE_MS` | 500ms | Minimum interval between browse tree refreshes. |
-| `BROWSE_KARAOKE_WINDOW_MS` | 600ms | Karaoke bracket time window for browse tree items. |
-| `SUBTITLE_KARAOKE_WINDOW_MS` | 300ms | Karaoke bracket time window for now-playing subtitle. |
-| `SESSION_REFRESH_MS` | 1500ms | Periodic MediaSession playback state refresh interval. |
-| `PLAIN_LOOP_DELAY_MS` | 2000ms | Plain lyrics browse tree periodic advance interval. |
-
-## SharedPreferences Keys (`auto_lyrics_prefs`)
-
-| Key | Type | Default | Purpose |
-|---|---|---|---|
-| `lyrics_font_size` | Int | 16 | Phone lyrics text size (sp). |
-| `lyrics_font_family` | String | `sans-serif` | Phone lyrics font family. |
-| `aa_karaoke_enabled` | Boolean | true | Toggle karaoke bracket display on AA. |
-| `aa_offset_ms` | Long | 0 | Android Auto-specific lyrics delay (ms). |
-
-## Karaoke Bracket Logic (AA)
-
-The bracket display uses **monotonic advancement** to avoid visual jitter:
-- Opening bracket `【` is placed at the current word index.
-- Closing bracket `】` is placed at the last word within the karaoke window.
-- Both `lastKaraokeWordIdx` and `endIdx` only advance forward within the same line.
-- `resetKaraokeState()` is called on track change and line change to allow the brackets to start fresh.
 
 ## Lyrics Fetch Priority
 
-1. **SyncLRC** (`synclrc.tharuk.pro`) — returns karaoke (ELRC), synced (LRC), or plain text.
-2. **LRCLIB** (`lrclib.net`) — fallback, returns synced (LRC) or plain text.
-3. Within a response, preference: karaoke > synced > plain.
+1. Query LRCLIB.
+2. If LRCLIB returns acceptable synchronized lyrics, use it immediately.
+3. If LRCLIB has only plain lyrics or no result, query PetitLyrics when configured.
+4. If PetitLyrics returns a supported synchronized result, use PetitLyrics.
+5. Otherwise fall back to LRCLIB plain lyrics if available.
+
+Android Auto displays the selected provider in the track header, for example:
+
+```text
+⟳ Synced · LRCLIB
+⟳ Synced · PetitLyrics
+```
+
+## PetitLyrics Provider
+
+The PetitLyrics integration is based on the request/response structure demonstrated by the reference project `whoxamxl/petitlyric_sync_lyric_download`.
+
+The Android provider intentionally supports only **lyricsType=3** word-sync XML responses. Auto Lyrics reads the first word start time of each line and imports it as line-level synchronization. Word-level karaoke timing is not imported. The binary `lyricsType=2` line-sync decoder from the reference project is not implemented; those responses fall back to LRCLIB.
+
+This integration uses an internal/unofficial PetitLyrics endpoint and is not affiliated with PetitLyrics. Availability and behavior may change independently of Auto Lyrics.
+
+### Local configuration
+
+Copy the tracked template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Fill in your own registered client values:
+
+```dotenv
+PETITLYRICS_USER_ID=your-user-id
+PETITLYRICS_APP_NAME=your-app-name
+PETITLYRICS_PKG_NAME=your-package-name
+PETITLYRICS_CLIENT_APP_ID=your-client-app-id
+```
+
+`.env` is ignored by Git and must not be committed.
+
+`app/build.gradle.kts` reads each value from the process environment first and then falls back to the local `.env` file. Missing values are compiled as empty strings, in which case `PetitLyricsClient.isConfigured` is false and the provider is skipped cleanly.
+
+### Important credential note
+
+These values are injected into Android `BuildConfig`. This keeps them out of Git, but **does not make them secret inside a distributed APK**. A sufficiently motivated user can extract client-side constants from an APK. Do not use credentials whose security model assumes they can remain confidential on an end-user device.
+
+## GitHub Actions / Release configuration
+
+Repository Actions secrets should be created with the same four names:
+
+```text
+PETITLYRICS_USER_ID
+PETITLYRICS_APP_NAME
+PETITLYRICS_PKG_NAME
+PETITLYRICS_CLIENT_APP_ID
+```
+
+`.github/workflows/build.yml` maps these secrets into environment variables for Gradle. Pull-request builds still succeed if the secrets are unavailable; the PetitLyrics provider is simply disabled in that APK.
+
+### Release procedure
+
+1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
+2. Merge the release changes into `main`.
+3. Confirm the four GitHub Actions secrets are configured in the repository.
+4. Create and push a matching version tag, for example:
+
+```bash
+git tag v1.9.8
+git push origin v1.9.8
+```
+
+The `Build APK` workflow will run unit tests, build the APK with the GitHub Actions secret values injected, rename the APK with the version name, and create the GitHub Release for `v*` tags.
+
+For local release/debug builds, a populated `.env` is sufficient:
+
+```bash
+gradle testDebugUnitTest
+gradle assembleDebug
+```
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Media tracking and provider selection. |
+| `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB search and candidate matching. |
+| `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | Optional PetitLyrics type-3 client and parser. |
+| `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Lyrics cache keyed by normalized title, artist, album, and duration. |
+| `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Query metadata cleanup. |
+| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto browse + MediaSession integration. |
+| `.env.example` | Local PetitLyrics configuration template. |
+| `.github/workflows/build.yml` | CI, tests, APK artifact, and tagged GitHub releases. |
+
+## Android Auto Browse Constants
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `WINDOW_SIZE` | 3 | Number of synchronized lines in the AA browse window. |
+| `PLAIN_WINDOW_SIZE` | 4 | Number of unsynchronized lines in the AA browse window. |
+| `PAD_WIDTH` | 60 | Character padding for browse items. |
+| `NOTIFY_THROTTLE_MS` | 500 ms | Minimum browse-tree refresh interval. |
+| `BROWSE_KARAOKE_WINDOW_MS` | 600 ms | Legacy word-timing display window. |
+| `SUBTITLE_KARAOKE_WINDOW_MS` | 300 ms | Legacy now-playing word-timing display window. |
+| `SESSION_REFRESH_MS` | 1500 ms | MediaSession refresh interval. |
+| `PLAIN_LOOP_DELAY_MS` | 2000 ms | Plain lyrics browse advance interval. |
