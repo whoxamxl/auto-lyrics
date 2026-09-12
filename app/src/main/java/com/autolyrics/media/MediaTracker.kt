@@ -14,7 +14,6 @@ import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
-import com.autolyrics.lyrics.SyncLrcClient
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -41,7 +40,6 @@ class MediaTracker private constructor(context: Context) {
     private var lastPositionUpdateTime: Long = 0
     private var playbackSpeed: Float = 1.0f
     private var fetchJob: Job? = null
-    private var prefetchJob: Job? = null
     private var artJob: Job? = null
     private var translationJob: Job? = null
     private var pendingTrack: TrackInfo? = null
@@ -66,7 +64,7 @@ class MediaTracker private constructor(context: Context) {
         val track = pendingTrack ?: return@Runnable
         val art = pendingArt
         val current = _state.value.track
-        if (track.title == current?.title && track.artist == current.artist) return@Runnable
+        if (track == current) return@Runnable
 
         translationJob?.cancel()
         _state.value = _state.value.copy(
@@ -119,7 +117,7 @@ class MediaTracker private constructor(context: Context) {
 
     fun setOffset(ms: Long) {
         lyricsOffsetMs = ms
-        prefs.edit().putLong("lyrics_offset_ms", lyricsOffsetMs).apply()
+        prefs.edit().putLong("lyrics_offset_ms", ms).apply()
         _state.value = _state.value.copy(offsetMs = lyricsOffsetMs)
         updateCurrentPosition()
     }
@@ -211,7 +209,7 @@ class MediaTracker private constructor(context: Context) {
         val newTrack = TrackInfo(title, artist, album, duration)
         val current = _state.value.track
 
-        if (current != null && newTrack.title == current.title && newTrack.artist == current.artist) {
+        if (current != null && newTrack == current) {
             if (art != null && _state.value.albumArt == null) {
                 _state.value = _state.value.copy(albumArt = art)
                 extractAlbumColors(art)
@@ -259,7 +257,7 @@ class MediaTracker private constructor(context: Context) {
         fetchJob?.cancel()
         fetchJob = scope.launch(Dispatchers.IO) {
             try {
-                val cached = lyricsCache.get(track.title, track.artist)
+                val cached = lyricsCache.get(track)
                 if (cached != null) {
                     val (lines, status, source) = cached
                     withContext(Dispatchers.Main) {
@@ -277,20 +275,19 @@ class MediaTracker private constructor(context: Context) {
                         translateIfNeeded(lines, track)
                     }
 
-                    val cacheAge = lyricsCache.getAge(track.title, track.artist)
+                    val cacheAge = lyricsCache.getAge(track)
                     if (cacheAge < CACHE_REFRESH_MS) {
-                        prefetchNextSong()
                         return@launch
                     }
                 }
 
-                val result = fetchFromSyncLrc(track) ?: fetchFromLrcLib(track)
+                val result = fetchBestLyrics(track)
 
                 withContext(Dispatchers.Main) {
                     if (_state.value.track != track) return@withContext
 
                     if (result != null) {
-                        lyricsCache.put(track.title, track.artist, result.lines, result.status, result.source)
+                        lyricsCache.put(track, result.lines, result.status, result.source)
                         _state.value = _state.value.copy(
                             lines = result.lines,
                             currentIndex = -1,
@@ -309,8 +306,6 @@ class MediaTracker private constructor(context: Context) {
                         )
                     }
                 }
-
-                prefetchNextSong()
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -326,79 +321,14 @@ class MediaTracker private constructor(context: Context) {
         }
     }
 
-    private fun prefetchNextSong() {
-        prefetchJob?.cancel()
-        prefetchJob = scope.launch(Dispatchers.IO) {
-            try {
-                val controller = activeController ?: return@launch
-                val queue = controller.queue ?: return@launch
-                val currentTitle = _state.value.track?.title ?: return@launch
-                val currentArtist = _state.value.track?.artist ?: return@launch
-
-                var foundCurrent = false
-                for (item in queue) {
-                    val desc = item.description
-                    val title = MetadataCleaner.cleanTitle(desc.title?.toString() ?: continue)
-                    val artist = MetadataCleaner.cleanArtist(desc.subtitle?.toString() ?: "")
-
-                    if (!foundCurrent) {
-                        if (title.equals(currentTitle, ignoreCase = true) &&
-                            artist.equals(currentArtist, ignoreCase = true)
-                        ) {
-                            foundCurrent = true
-                        }
-                        continue
-                    }
-
-                    if (lyricsCache.get(title, artist) != null) return@launch
-
-                    val nextTrack = TrackInfo(title, artist, "", 0)
-                    val result = fetchFromSyncLrc(nextTrack) ?: fetchFromLrcLib(nextTrack)
-                    if (result != null) {
-                        lyricsCache.put(title, artist, result.lines, result.status, result.source)
-                    }
-                    return@launch
-                }
-            } catch (_: Exception) {
-                // prefetch failures are non-fatal
-            }
-        }
-    }
-
     private data class FetchResult(
         val lines: List<LyricLine>,
         val status: LyricsStatus,
         val source: String
     )
 
-    private fun fetchFromSyncLrc(track: TrackInfo): FetchResult? {
-        val result = try {
-            SyncLrcClient.getLyrics(track.title, track.artist)
-        } catch (_: Exception) {
-            null
-        } ?: return null
-
-        return when (result.type) {
-            SyncLrcClient.LyricsType.KARAOKE -> {
-                val lines = LrcParser.parseKaraoke(result.lyrics)
-                val hasRealText = lines.any { it.text != "♪" && it.text.isNotBlank() }
-                if (hasRealText) FetchResult(lines, LyricsStatus.FOUND, "SyncLRC · Karaoke")
-                else null
-            }
-            SyncLrcClient.LyricsType.SYNCED -> {
-                val lines = LrcParser.parse(result.lyrics)
-                val hasRealText = lines.any { it.text != "♪" && it.text.isNotBlank() }
-                if (hasRealText) FetchResult(lines, LyricsStatus.FOUND, "SyncLRC · Synced")
-                else null
-            }
-            SyncLrcClient.LyricsType.PLAIN -> {
-                val lines = result.lyrics.lines()
-                    .filter { it.isNotBlank() }
-                    .map { text -> LyricLine(0L, text) }
-                if (lines.isNotEmpty()) FetchResult(lines, LyricsStatus.PLAIN_ONLY, "SyncLRC · Plain")
-                else null
-            }
-        }
+    private fun fetchBestLyrics(track: TrackInfo): FetchResult? {
+        return fetchFromLrcLib(track)
     }
 
     private fun fetchFromLrcLib(track: TrackInfo): FetchResult? {
