@@ -42,10 +42,14 @@ jobs:
           media = media_path.read_text()
 
           # 2) Use a cross-provider resolver for current-track fetch and prefetch.
-          old_call = "val result = fetchFromSyncLrc(track) ?: fetchFromLrcLib(track)"
-          if media.count(old_call) != 2:
-              raise SystemExit(f"Expected 2 provider-chain calls, found {media.count(old_call)}")
-          media = media.replace(old_call, "val result = fetchBestLyrics(track)")
+          current_call = "val result = fetchFromSyncLrc(track) ?: fetchFromLrcLib(track)"
+          prefetch_call = "val result = fetchFromSyncLrc(nextTrack) ?: fetchFromLrcLib(nextTrack)"
+          if media.count(current_call) != 1:
+              raise SystemExit(f"Expected 1 current-track provider-chain call, found {media.count(current_call)}")
+          if media.count(prefetch_call) != 1:
+              raise SystemExit(f"Expected 1 prefetch provider-chain call, found {media.count(prefetch_call)}")
+          media = media.replace(current_call, "val result = fetchBestLyrics(track)", 1)
+          media = media.replace(prefetch_call, "val result = fetchBestLyrics(nextTrack)", 1)
 
           marker = '''    private fun fetchFromSyncLrc(track: TrackInfo): FetchResult? {'''
           if marker not in media:
@@ -80,8 +84,8 @@ jobs:
               raise SystemExit(f"Expected to replace one lyricsTypeLabel, replaced {count}")
           browser_path.write_text(browser)
 
-          # 4) Invalidate old cached provider decisions so Test 1 actually exercises
-          #    the new resolver immediately on devices that already used Auto Lyrics.
+          # 4) Invalidate old cached provider decisions so Test 1 immediately
+          #    exercises the new resolver on devices that already used Auto Lyrics.
           replace_once(
               "app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt",
               '''        val key = "${title.lowercase().trim()}|${artist.lowercase().trim()}"''',
@@ -132,8 +136,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v1.9.6-lrc-provider-test1"
-          git tag -f "$TAG" "${{ steps.commit.outputs.sha }}"
-          git push origin -f "$TAG"
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           git tag -f "$TAG" "${{ steps.commit.outputs.sha }}"
           git push origin -f "$TAG"
