@@ -14,7 +14,6 @@ import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
-import com.autolyrics.lyrics.SyncLrcClient
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -119,7 +118,7 @@ class MediaTracker private constructor(context: Context) {
 
     fun setOffset(ms: Long) {
         lyricsOffsetMs = ms
-        prefs.edit().putLong("lyrics_offset_ms", lyricsOffsetMs).apply()
+        prefs.edit().putLong("lyrics_offset_ms", ms).apply()
         _state.value = _state.value.copy(offsetMs = lyricsOffsetMs)
         updateCurrentPosition()
     }
@@ -372,41 +371,7 @@ class MediaTracker private constructor(context: Context) {
     )
 
     private fun fetchBestLyrics(track: TrackInfo): FetchResult? {
-        // Prefer synchronized lyrics across providers. A plain SyncLRC hit must
-        // not prevent us from checking whether LRCLIB has a synchronized LRC.
-        val syncResult = fetchFromSyncLrc(track)
-        if (syncResult?.status == LyricsStatus.FOUND) return syncResult
-
-        val lrcLibResult = fetchFromLrcLib(track)
-        if (lrcLibResult?.status == LyricsStatus.FOUND) return lrcLibResult
-
-        // Neither provider has synchronized lyrics. Keep the existing provider
-        // preference for plain lyrics: SyncLRC first, then LRCLIB.
-        return syncResult ?: lrcLibResult
-    }
-
-    private fun fetchFromSyncLrc(track: TrackInfo): FetchResult? {
-        val result = try {
-            SyncLrcClient.getLyrics(track.title, track.artist)
-        } catch (_: Exception) {
-            null
-        } ?: return null
-
-        return when (result.type) {
-            SyncLrcClient.LyricsType.SYNCED -> {
-                val lines = LrcParser.parse(result.lyrics)
-                val hasRealText = lines.any { it.text != "♪" && it.text.isNotBlank() }
-                if (hasRealText) FetchResult(lines, LyricsStatus.FOUND, "SyncLRC · Synced")
-                else null
-            }
-            SyncLrcClient.LyricsType.PLAIN -> {
-                val lines = result.lyrics.lines()
-                    .filter { it.isNotBlank() }
-                    .map { text -> LyricLine(0L, text) }
-                if (lines.isNotEmpty()) FetchResult(lines, LyricsStatus.PLAIN_ONLY, "SyncLRC · Plain")
-                else null
-            }
-        }
+        return fetchFromLrcLib(track)
     }
 
     private fun fetchFromLrcLib(track: TrackInfo): FetchResult? {
