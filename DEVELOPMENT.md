@@ -97,7 +97,7 @@ PETITLYRICS_PKG_NAME
 PETITLYRICS_CLIENT_APP_ID
 ```
 
-`.github/workflows/build.yml` maps these secrets into environment variables for Gradle. Pull-request builds still succeed if the secrets are unavailable; the PetitLyrics provider is simply disabled in that APK.
+`.github/workflows/build.yml` injects these secrets only for `v*` tag builds. Ordinary pull-request and `main` CI artifacts compile with empty PetitLyrics values, so the provider is disabled there and the identifiers are not embedded in routine artifacts.
 
 ### Release procedure
 
