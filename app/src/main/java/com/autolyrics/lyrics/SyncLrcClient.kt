@@ -68,7 +68,6 @@ object SyncLrcClient {
                 val lyrics = parsed.lyrics
                 if (lyrics.isNullOrBlank()) return@use null
                 val actualType = when (parsed.type) {
-                    "karaoke" -> LyricsType.KARAOKE
                     "synced" -> LyricsType.SYNCED
                     "plain" -> LyricsType.PLAIN
                     else -> type
