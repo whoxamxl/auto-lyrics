@@ -20,8 +20,11 @@ object MetadataCleaner {
 
     fun cleanTitle(raw: String): String {
         var s = raw.trim()
+        // Remove presentation/platform labels, but keep recording-version labels
+        // such as Live, Acoustic, Remix and Remaster. Those can identify a
+        // genuinely different recording with different timing.
         s = s.replace(
-            Regex("""\s*[\(\[].*?\b(official|video|lyric|audio|visualizer|live|acoustic)\b.*?[\)\]]""", RegexOption.IGNORE_CASE),
+            Regex("""\s*[\(\[].*?\b(official|video|lyric|lyrics|audio|visualizer)\b.*?[\)\]]""", RegexOption.IGNORE_CASE),
             ""
         )
         s = removeQualityTags(s)

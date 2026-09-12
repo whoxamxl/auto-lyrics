@@ -4,9 +4,11 @@ import android.content.Context
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
+import com.autolyrics.model.TrackInfo
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import java.io.File
+import java.text.Normalizer
+import java.util.Locale
 
 class LyricsCache(context: Context) {
 
@@ -35,8 +37,8 @@ class LyricsCache(context: Context) {
         val text: String
     )
 
-    fun get(title: String, artist: String): Triple<List<LyricLine>, LyricsStatus, String>? {
-        val file = cacheFile(title, artist)
+    fun get(track: TrackInfo): Triple<List<LyricLine>, LyricsStatus, String>? {
+        val file = cacheFile(track)
         if (!file.exists()) return null
 
         return try {
@@ -61,7 +63,12 @@ class LyricsCache(context: Context) {
         }
     }
 
-    fun put(title: String, artist: String, lines: List<LyricLine>, status: LyricsStatus, source: String) {
+    fun put(
+        track: TrackInfo,
+        lines: List<LyricLine>,
+        status: LyricsStatus,
+        source: String
+    ) {
         try {
             val cached = CachedResult(
                 lines = lines.map { line ->
@@ -75,15 +82,15 @@ class LyricsCache(context: Context) {
                 source = source,
                 timestamp = System.currentTimeMillis()
             )
-            val file = cacheFile(title, artist)
+            val file = cacheFile(track)
             file.writeText(gson.toJson(cached))
         } catch (_: Exception) {
             // cache write failures are non-fatal
         }
     }
 
-    fun getAge(title: String, artist: String): Long {
-        val file = cacheFile(title, artist)
+    fun getAge(track: TrackInfo): Long {
+        val file = cacheFile(track)
         if (!file.exists()) return Long.MAX_VALUE
         return try {
             val json = file.readText()
@@ -94,9 +101,28 @@ class LyricsCache(context: Context) {
         }
     }
 
-    private fun cacheFile(title: String, artist: String): File {
-        val key = "${title.lowercase().trim()}|${artist.lowercase().trim()}"
+    private fun cacheFile(track: TrackInfo): File {
+        val durationSec = if (track.durationMs > 0) {
+            ((track.durationMs + 500L) / 1000L).toString()
+        } else {
+            "unknown"
+        }
+
+        val key = listOf(
+            "v4",
+            normalizeKeyPart(track.title),
+            normalizeKeyPart(track.artist),
+            normalizeKeyPart(track.album),
+            durationSec
+        ).joinToString("|")
+
         val hash = key.hashCode().toUInt().toString(16)
         return File(cacheDir, "$hash.json")
+    }
+
+    private fun normalizeKeyPart(value: String): String {
+        return Normalizer.normalize(value, Normalizer.Form.NFKC)
+            .lowercase(Locale.ROOT)
+            .trim()
     }
 }
