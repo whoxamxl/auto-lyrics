@@ -67,6 +67,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val SYNC_MINUS_ID = "sync_minus"
         private const val SYNC_PLUS_ID = "sync_plus"
         private const val SYNC_STEP_MS = 50L
+        private const val SYNC_WINDOW_SIZE = 3
         private const val DEFAULT_WINDOW_SIZE = 5
         private const val TRANSLATED_WINDOW_SIZE = 3
         private const val CURRENT_LINE_PREFIX = "▶  "
@@ -249,16 +250,29 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 } else 0
             }
 
-            val curLine = state.lines.getOrNull(idx)
-            val curText = if (curLine != null && aaKaraokeEnabled && curLine.words.isNotEmpty()) {
-                buildKaraokeText(curLine, idx, posMs, BROWSE_KARAOKE_WINDOW_MS)
-            } else {
-                curLine?.text ?: "♪"
+            val half = SYNC_WINDOW_SIZE / 2
+            val windowStart = maxOf(0, idx - half)
+            val windowEnd = minOf(state.lines.size, windowStart + SYNC_WINDOW_SIZE)
+            val adjustedStart = maxOf(0, windowEnd - SYNC_WINDOW_SIZE)
+
+            for (i in adjustedStart until windowEnd) {
+                val line = state.lines[i]
+                val isCurrent = i == idx
+                val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
+                    buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
+                } else {
+                    line.text.ifBlank { "♪" }
+                }
+                val trans = state.translatedLines?.getOrNull(i)?.takeIf { it.isNotBlank() }
+                items.add(
+                    buildTextItem(
+                        "sync_line_$i",
+                        "${linePrefix(isCurrent)}$text",
+                        pad = true,
+                        subtitle = trans
+                    )
+                )
             }
-            val curTrans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_cur", "$CURRENT_LINE_PREFIX$curText", pad = true, subtitle = curTrans))
-            val nextTrans = state.translatedLines?.getOrNull(idx + 1)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_next", "$IDLE_LINE_PREFIX${state.lines.getOrNull(idx + 1)?.text ?: ""}", pad = true, subtitle = nextTrans))
         }
 
         items.add(buildTextItem(SYNC_MINUS_ID, "⏪  − 50ms"))
