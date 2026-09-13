@@ -166,6 +166,16 @@
         android:paddingBottom="10dp"
         android:visibility="gone">
 
+        <!-- Phone UI section title -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Phone UI"
+            android:textColor="#8888AA"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-medium"
+            android:layout_marginBottom="8dp" />
+
         <!-- Font size row -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -202,7 +212,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="10dp"
                 android:layout_marginEnd="10dp"
-                android:text="16sp"
+                android:text="16 sp"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp"
                 android:fontFamily="sans-serif-medium"
