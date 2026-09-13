@@ -1,9 +1,11 @@
 package com.autolyrics
 
+import android.app.DownloadManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.Gravity
@@ -18,8 +20,10 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.autolyrics.lyrics.LyricsTranslator
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -27,6 +31,15 @@ class TranslationStatusView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
+
+    private data class DownloadManagerDebugInfo(
+        val expectedFiles: Set<String>,
+        val matchedFile: String? = null,
+        val status: Int? = null,
+        val bytesDownloaded: Long? = null,
+        val totalBytes: Long? = null,
+        val error: String? = null
+    )
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -59,7 +72,18 @@ class TranslationStatusView @JvmOverloads constructor(
         visibility = View.GONE
     }
 
+    private val debugText = TextView(context).apply {
+        setTextColor(Color.parseColor("#777792"))
+        textSize = 9f
+        typeface = Typeface.MONOSPACE
+        visibility = View.GONE
+        setPadding(0, dp(6), 0, 0)
+    }
+
     private var observationJob: Job? = null
+    private var debugDiagnosticsJob: Job? = null
+    private var hostActivity: AppCompatActivity? = null
+
     private val elapsedRefreshRunnable = Runnable {
         render(LyricsTranslator.uiState.value)
     }
@@ -101,6 +125,13 @@ class TranslationStatusView @JvmOverloads constructor(
                 topMargin = dp(4)
             }
         )
+
+        if (BuildConfig.DEBUG) {
+            addView(
+                debugText,
+                LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+        }
     }
 
     override fun onAttachedToWindow() {
@@ -109,6 +140,7 @@ class TranslationStatusView @JvmOverloads constructor(
         render(LyricsTranslator.uiState.value)
 
         val activity = context as? AppCompatActivity ?: return
+        hostActivity = activity
         observationJob?.cancel()
         observationJob = activity.lifecycleScope.launch {
             activity.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -121,6 +153,9 @@ class TranslationStatusView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         removeCallbacks(elapsedRefreshRunnable)
+        debugDiagnosticsJob?.cancel()
+        debugDiagnosticsJob = null
+        hostActivity = null
         observationJob?.cancel()
         observationJob = null
         prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
@@ -132,6 +167,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
         if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) {
             progressBar.hide()
+            hideDebugDiagnostics()
             visibility = View.GONE
             return
         }
@@ -159,20 +195,20 @@ class TranslationStatusView @JvmOverloads constructor(
             state.sourceLanguage?.let { downloadStartedAtByLanguage.remove(it) }
         }
 
+        val elapsedMs = if (state.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL) {
+            currentDownloadElapsedMs(state.sourceLanguage)
+        } else {
+            null
+        }
+
         val text = when (state.phase) {
             LyricsTranslator.Phase.IDLE -> null
             LyricsTranslator.Phase.DETECTING_LANGUAGE -> "Detecting language…"
             LyricsTranslator.Phase.CHECKING_MODEL ->
                 "Checking ${language ?: "translation"} → English model…"
-            LyricsTranslator.Phase.DOWNLOADING_MODEL -> {
-                val key = state.sourceLanguage ?: UNKNOWN_LANGUAGE_KEY
-                val startedAt = downloadStartedAtByLanguage.getOrPut(key) {
-                    SystemClock.elapsedRealtime()
-                }
-                val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+            LyricsTranslator.Phase.DOWNLOADING_MODEL ->
                 "Downloading ${language ?: "translation"} → English model…\n" +
-                    "Elapsed ${formatElapsed(elapsedMs)}"
-            }
+                    "Elapsed ${formatElapsed(elapsedMs ?: 0L)}"
             LyricsTranslator.Phase.TRANSLATING ->
                 "Translating ${language ?: "lyrics"} → English…"
             LyricsTranslator.Phase.READY ->
@@ -191,6 +227,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
         if (text == null) {
             progressBar.hide()
+            hideDebugDiagnostics()
             visibility = View.GONE
             return
         }
@@ -213,7 +250,12 @@ class TranslationStatusView @JvmOverloads constructor(
         retryButton.visibility = if (canRetry) View.VISIBLE else View.GONE
 
         if (state.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL) {
+            if (BuildConfig.DEBUG && state.sourceLanguage != null) {
+                refreshDebugDiagnostics(state.sourceLanguage, elapsedMs ?: 0L)
+            }
             postDelayed(elapsedRefreshRunnable, ELAPSED_REFRESH_MS)
+        } else {
+            hideDebugDiagnostics()
         }
     }
 
@@ -235,12 +277,190 @@ class TranslationStatusView @JvmOverloads constructor(
         }, RETRY_TOGGLE_DELAY_MS)
     }
 
+    private fun refreshDebugDiagnostics(sourceLanguage: String, elapsedMs: Long) {
+        if (!BuildConfig.DEBUG || debugDiagnosticsJob?.isActive == true) return
+        val activity = hostActivity ?: return
+
+        debugDiagnosticsJob = activity.lifecycleScope.launch(Dispatchers.IO) {
+            val info = queryDownloadManager(sourceLanguage)
+            val debug = buildDebugText(info, elapsedMs)
+            withContext(Dispatchers.Main) {
+                val current = LyricsTranslator.uiState.value
+                if (isAttachedToWindow &&
+                    current.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL &&
+                    current.sourceLanguage == sourceLanguage
+                ) {
+                    debugText.text = debug
+                    debugText.visibility = View.VISIBLE
+                }
+            }
+        }
+    }
+
+    private fun hideDebugDiagnostics() {
+        debugDiagnosticsJob?.cancel()
+        debugDiagnosticsJob = null
+        debugText.visibility = View.GONE
+    }
+
+    private fun queryDownloadManager(sourceLanguage: String): DownloadManagerDebugInfo {
+        val expectedFiles = expectedModelFileNames(sourceLanguage)
+        if (expectedFiles.isEmpty()) {
+            return DownloadManagerDebugInfo(
+                expectedFiles = emptySet(),
+                error = "no filename candidates for '$sourceLanguage'"
+            )
+        }
+
+        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+            ?: return DownloadManagerDebugInfo(
+                expectedFiles = expectedFiles,
+                error = "DownloadManager unavailable"
+            )
+
+        return try {
+            manager.query(DownloadManager.Query()).use { cursor ->
+                val uriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_URI)
+                val titleIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                val bytesIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                val totalIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                val modifiedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LAST_MODIFIED_TIMESTAMP)
+
+                var bestFile: String? = null
+                var bestStatus: Int? = null
+                var bestBytes: Long? = null
+                var bestTotal: Long? = null
+                var bestModified = Long.MIN_VALUE
+
+                while (cursor.moveToNext()) {
+                    val uri = if (uriIndex >= 0) cursor.getString(uriIndex).orEmpty() else ""
+                    val title = if (titleIndex >= 0) cursor.getString(titleIndex).orEmpty() else ""
+                    val uriFile = uri.substringAfterLast('/').substringBefore('?').lowercase(Locale.US)
+                    val titleFile = title.lowercase(Locale.US)
+                    val matchedFile = expectedFiles.firstOrNull { candidate ->
+                        uriFile == candidate || titleFile == candidate ||
+                            uri.lowercase(Locale.US).endsWith("/$candidate")
+                    } ?: continue
+
+                    val modified = if (modifiedIndex >= 0) cursor.getLong(modifiedIndex) else 0L
+                    val status = if (statusIndex >= 0) cursor.getInt(statusIndex) else null
+                    val isActive = status == DownloadManager.STATUS_PENDING ||
+                        status == DownloadManager.STATUS_RUNNING ||
+                        status == DownloadManager.STATUS_PAUSED
+                    val bestIsActive = bestStatus == DownloadManager.STATUS_PENDING ||
+                        bestStatus == DownloadManager.STATUS_RUNNING ||
+                        bestStatus == DownloadManager.STATUS_PAUSED
+
+                    if (bestFile == null || (isActive && !bestIsActive) ||
+                        (isActive == bestIsActive && modified >= bestModified)
+                    ) {
+                        bestFile = matchedFile
+                        bestStatus = status
+                        bestBytes = if (bytesIndex >= 0) cursor.getLong(bytesIndex) else null
+                        bestTotal = if (totalIndex >= 0) cursor.getLong(totalIndex) else null
+                        bestModified = modified
+                    }
+                }
+
+                DownloadManagerDebugInfo(
+                    expectedFiles = expectedFiles,
+                    matchedFile = bestFile,
+                    status = bestStatus,
+                    bytesDownloaded = bestBytes,
+                    totalBytes = bestTotal
+                )
+            }
+        } catch (e: Exception) {
+            DownloadManagerDebugInfo(
+                expectedFiles = expectedFiles,
+                error = "${e.javaClass.simpleName}: ${e.localizedMessage ?: "query failed"}"
+            )
+        }
+    }
+
+    private fun expectedModelFileNames(sourceLanguage: String): Set<String> {
+        val normalized = Locale.forLanguageTag(sourceLanguage).language
+            .ifBlank { sourceLanguage.substringBefore('-') }
+            .lowercase(Locale.US)
+        if (normalized.isBlank() || normalized == "en") return emptySet()
+
+        val sourceCodes = when (normalized) {
+            // Some Android/ML Kit download URLs still use legacy Java language codes.
+            "he" -> setOf("he", "iw")
+            "id" -> setOf("id", "in")
+            "yi" -> setOf("yi", "ji")
+            else -> setOf(normalized)
+        }
+
+        return sourceCodes.mapTo(linkedSetOf()) { sourceCode ->
+            listOf(sourceCode, "en")
+                .sorted()
+                .joinToString("_") + ".zip"
+        }
+    }
+
+    private fun buildDebugText(info: DownloadManagerDebugInfo, elapsedMs: Long): String {
+        val downloadLine = when {
+            info.error != null -> "DownloadManager: ${info.error}"
+            info.matchedFile == null ->
+                "DownloadManager: no matching ${info.expectedFiles.joinToString(" / ")} row"
+            else -> {
+                val downloaded = formatBytes(info.bytesDownloaded)
+                val total = formatBytes(info.totalBytes)
+                "DownloadManager: $downloaded / $total · ${downloadStatusName(info.status)} · ${info.matchedFile}"
+            }
+        }
+
+        return buildString {
+            append("ML Kit task: pending\n")
+            append("Model available: false\n")
+            append("Elapsed: ${formatElapsed(elapsedMs)}\n")
+            append(downloadLine)
+        }
+    }
+
+    private fun downloadStatusName(status: Int?): String = when (status) {
+        DownloadManager.STATUS_PENDING -> "pending"
+        DownloadManager.STATUS_RUNNING -> "running"
+        DownloadManager.STATUS_PAUSED -> "paused"
+        DownloadManager.STATUS_SUCCESSFUL -> "successful"
+        DownloadManager.STATUS_FAILED -> "failed"
+        null -> "unknown"
+        else -> "status=$status"
+    }
+
+    private fun formatBytes(bytes: Long?): String {
+        if (bytes == null || bytes < 0) return "?"
+        return when {
+            bytes >= 1024L * 1024L -> String.format(
+                Locale.US,
+                "%.1f MB",
+                bytes.toDouble() / (1024.0 * 1024.0)
+            )
+            bytes >= 1024L -> String.format(
+                Locale.US,
+                "%.1f KB",
+                bytes.toDouble() / 1024.0
+            )
+            else -> "$bytes B"
+        }
+    }
+
     private fun languageName(code: String?): String? {
         if (code.isNullOrBlank() || code == "und") return null
         return Locale.forLanguageTag(code)
             .getDisplayLanguage(Locale.ENGLISH)
             .takeIf { it.isNotBlank() }
             ?: code.uppercase(Locale.ENGLISH)
+    }
+
+    private fun currentDownloadElapsedMs(sourceLanguage: String?): Long {
+        val key = sourceLanguage ?: UNKNOWN_LANGUAGE_KEY
+        val startedAt = downloadStartedAtByLanguage.getOrPut(key) {
+            SystemClock.elapsedRealtime()
+        }
+        return (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
     }
 
     private fun formatElapsed(elapsedMs: Long): String {
