@@ -124,7 +124,7 @@ class LyricsCache(context: Context) {
         }
 
         val key = listOf(
-            "v10",
+            "v11",
             normalizeKeyPart(track.title),
             normalizeKeyPart(track.artist),
             normalizeKeyPart(track.album),
