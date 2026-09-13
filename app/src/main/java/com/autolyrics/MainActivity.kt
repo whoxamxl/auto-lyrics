@@ -16,10 +16,12 @@ import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.annotation.SuppressLint
 import android.content.SharedPreferences
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.LinearInterpolator
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -138,12 +140,9 @@ class MainActivity : AppCompatActivity() {
             if (previousOffset == 0L) return@setOnClickListener
 
             mediaTracker.resetOffset()
-
-            Snackbar.make(rootLayout, "Phone Sync reset", Snackbar.LENGTH_LONG)
-                .setAction("↩ Undo") {
-                    mediaTracker.setOffset(previousOffset)
-                }
-                .show()
+            showUndoSnackbar("Phone Sync reset") {
+                mediaTracker.setOffset(previousOffset)
+            }
         }
 
         fontSettingsPanel = findViewById(R.id.layout_font_settings)
@@ -232,13 +231,11 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putLong(AA_OFFSET_PREF_KEY, 0L).apply()
             updateAaDelayDisplay()
 
-            Snackbar.make(rootLayout, "AA Sync reset", Snackbar.LENGTH_LONG)
-                .setAction("↩ Undo") {
-                    aaOffsetMs = previousOffset
-                    prefs.edit().putLong(AA_OFFSET_PREF_KEY, previousOffset).apply()
-                    updateAaDelayDisplay()
-                }
-                .show()
+            showUndoSnackbar("AA Sync reset") {
+                aaOffsetMs = previousOffset
+                prefs.edit().putLong(AA_OFFSET_PREF_KEY, previousOffset).apply()
+                updateAaDelayDisplay()
+            }
         }
 
         btnTapSync = findViewById(R.id.btn_tap_sync)
@@ -421,6 +418,21 @@ class MainActivity : AppCompatActivity() {
         val canReset = offsetMs != 0L
         btnPhoneSyncReset.isEnabled = canReset
         btnPhoneSyncReset.alpha = if (canReset) 1f else 0.35f
+    }
+
+    private fun showUndoSnackbar(message: String, onUndo: () -> Unit) {
+        val snackbar = Snackbar.make(rootLayout, message, Snackbar.LENGTH_LONG)
+            .setAction("↩ Undo") { onUndo() }
+
+        val snackbarView = snackbar.view
+        val params = snackbarView.layoutParams
+        if (params is FrameLayout.LayoutParams) {
+            params.width = FrameLayout.LayoutParams.WRAP_CONTENT
+            params.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            snackbarView.layoutParams = params
+        }
+
+        snackbar.show()
     }
 
     private fun renderSyncedLyrics(state: LyricsState) {
