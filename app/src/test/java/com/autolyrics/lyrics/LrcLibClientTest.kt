@@ -23,6 +23,28 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun exactContributorComponentCanMatchCompositeArtistMetadata() {
+        val score = LrcLibClient.artistSimilarity(
+            left = "Alan Menken, Howard Ashman, Samuel E. Wright, Disney",
+            right = "Samuel E. Wright",
+            allowContributorComponents = true
+        )
+
+        assertEquals(0.95, score, 0.0001)
+    }
+
+    @Test
+    fun contributorComponentsAreNotUsedForWeakTitleMatches() {
+        val score = LrcLibClient.artistSimilarity(
+            left = "Alan Menken, Howard Ashman, Samuel E. Wright, Disney",
+            right = "Samuel E. Wright",
+            allowContributorComponents = false
+        )
+
+        assertTrue(score < 0.95)
+    }
+
+    @Test
     fun liveVersionDoesNotMatchStudioVersion() {
         assertFalse(LrcLibClient.versionsCompatible("Song (Live)", "Song"))
         assertFalse(LrcLibClient.versionsCompatible("Song", "Song - Live"))

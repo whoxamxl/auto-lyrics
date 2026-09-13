@@ -485,7 +485,8 @@ class MediaTracker private constructor(context: Context) {
             lines = result.lines,
             status = LyricsStatus.FOUND,
             source = "PetitLyrics · Synced",
-            syncKind = syncKind
+            syncKind = syncKind,
+            artistQueryCorroborated = result.artistQueryCorroborated
         )
     }
 
