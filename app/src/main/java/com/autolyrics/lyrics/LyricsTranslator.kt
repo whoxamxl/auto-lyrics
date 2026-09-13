@@ -60,11 +60,11 @@ object LyricsTranslator {
     // model download continues and the newest track can reuse it.
     private val activeModelDownloads = ConcurrentHashMap<String, Task<Void>>()
 
-    // Once a model request has explicitly failed or timed out, do not silently start
-    // another request just because the track changed. Keep that language in a manual
-    // Retry state until the user presses Retry. If the old ML Kit task completes in
-    // the background, the authoritative model check below clears this automatically.
-    private val modelRetryRequired = ConcurrentHashMap<String, UiState>()
+    // A retryable failure stays latched until the user explicitly presses Retry.
+    // This prevents every track change from silently re-running a failed model
+    // download/translation attempt. Retry clears the latch, while any still-running
+    // ML Kit model Task remains available for reuse.
+    private val retryRequired = ConcurrentHashMap<String, UiState>()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -74,17 +74,24 @@ object LyricsTranslator {
     }
 
     fun prepareManualRetry() {
-        val language = _uiState.value.sourceLanguage
-        if (!language.isNullOrBlank()) {
-            val removed = modelRetryRequired.remove(language)
-            if (removed != null) {
-                Log.d(TAG, "manual retry enabled for language=$language")
-            }
+        if (retryRequired.isNotEmpty()) {
+            Log.d(TAG, "manual retry enabled; clearing ${retryRequired.size} retry gate(s)")
+            retryRequired.clear()
         }
         resetUiState()
     }
 
     suspend fun translateLines(lines: List<LyricLine>): TranslationResult? {
+        retryRequired.values.firstOrNull()?.let { blockedState ->
+            Log.d(
+                TAG,
+                "automatic translation retry suppressed until user presses Retry: " +
+                    "language=${blockedState.sourceLanguage} phase=${blockedState.phase}"
+            )
+            _uiState.value = blockedState
+            return null
+        }
+
         Log.d(TAG, "translateLines start: lines=${lines.size}")
         updateState(Phase.DETECTING_LANGUAGE)
 
@@ -142,7 +149,7 @@ object LyricsTranslator {
         } catch (e: Exception) {
             val reason = e.localizedMessage ?: e.javaClass.simpleName
             Log.e(TAG, "translation model check failed", e)
-            markModelRetryRequired(
+            markRetryRequired(
                 language = langCode,
                 phase = Phase.DOWNLOAD_FAILED,
                 reason = reason
@@ -151,20 +158,9 @@ object LyricsTranslator {
         }
 
         if (modelDownloaded) {
-            modelRetryRequired.remove(langCode)
+            retryRequired.remove(langCode)
             Log.d(TAG, "translation model already downloaded: $mlLang")
         } else {
-            val blockedState = modelRetryRequired[langCode]
-            if (blockedState != null) {
-                Log.d(
-                    TAG,
-                    "model retry waiting for explicit user action: language=$langCode " +
-                        "phase=${blockedState.phase}"
-                )
-                _uiState.value = blockedState
-                return null
-            }
-
             Log.d(TAG, "translation model missing; ensuring explicit download: $mlLang")
             updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = langCode)
             try {
@@ -177,21 +173,21 @@ object LyricsTranslator {
                 if (!becameAvailable) {
                     val reason = "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min"
                     Log.e(TAG, reason)
-                    markModelRetryRequired(
+                    markRetryRequired(
                         language = langCode,
                         phase = Phase.DOWNLOAD_TIMED_OUT,
                         reason = reason
                     )
                     return null
                 }
-                modelRetryRequired.remove(langCode)
+                retryRequired.remove(langCode)
                 Log.d(TAG, "translation model confirmed available: $mlLang")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val reason = e.localizedMessage ?: e.javaClass.simpleName
                 Log.e(TAG, "translation model download failed", e)
-                markModelRetryRequired(
+                markRetryRequired(
                     language = langCode,
                     phase = Phase.DOWNLOAD_FAILED,
                     reason = reason
@@ -231,11 +227,16 @@ object LyricsTranslator {
             if (attempted > 0 && failures == attempted) {
                 val reason = "All lyric lines failed to translate"
                 Log.e(TAG, reason)
-                updateState(Phase.TRANSLATION_FAILED, sourceLanguage = langCode, error = reason)
+                markRetryRequired(
+                    language = langCode,
+                    phase = Phase.TRANSLATION_FAILED,
+                    reason = reason
+                )
                 return null
             }
 
             Log.d(TAG, "translation complete: lines=${translated.size}, failures=$failures")
+            retryRequired.remove(langCode)
             updateState(Phase.READY, sourceLanguage = langCode)
             return TranslationResult(translated, langCode)
         } catch (e: CancellationException) {
@@ -243,14 +244,18 @@ object LyricsTranslator {
         } catch (e: Exception) {
             val reason = e.localizedMessage ?: e.javaClass.simpleName
             Log.e(TAG, "translation failed", e)
-            updateState(Phase.TRANSLATION_FAILED, sourceLanguage = langCode, error = reason)
+            markRetryRequired(
+                language = langCode,
+                phase = Phase.TRANSLATION_FAILED,
+                reason = reason
+            )
             return null
         } finally {
             translator.close()
         }
     }
 
-    private fun markModelRetryRequired(
+    private fun markRetryRequired(
         language: String,
         phase: Phase,
         reason: String
@@ -260,7 +265,7 @@ object LyricsTranslator {
             sourceLanguage = language,
             error = reason
         )
-        modelRetryRequired[language] = state
+        retryRequired[language] = state
         _uiState.value = state
     }
 
