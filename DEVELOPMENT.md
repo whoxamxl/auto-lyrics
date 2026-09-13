@@ -71,6 +71,8 @@ Android Auto displays the selected provider in the track header, for example:
 
 Cache identity includes normalized title, artist, album, and rounded duration. A fully corroborated provider comparison is cached for the normal seven-day interval. If PetitLyrics is enabled but only one provider returns a candidate (including timeout/transient-failure cases that cannot be distinguished from an empty result at the legacy client boundary), the selected result is treated as **provisional** and revalidated after 15 minutes rather than being frozen for seven days.
 
+This policy deliberately prefers a little extra network traffic over pinning a fallback result for a week after one provider had a temporary outage.
+
 ## PetitLyrics Provider
 
 The PetitLyrics integration is based on the request/response structure demonstrated by the reference project `whoxamxl/petitlyric_sync_lyric_download`.
