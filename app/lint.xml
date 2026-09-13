@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!--
+      Auto Lyrics exposes the currently playing app's lyrics through a
+      MediaBrowserService; it is not a searchable music catalog and does not
+      own media selection. Advertising MEDIA_PLAY_FROM_SEARCH would claim a
+      capability the service cannot fulfill, so the Android Auto voice-search
+      checks are intentionally disabled for this companion service only.
+    -->
+    <issue id="MissingIntentFilterForMediaSearch" severity="ignore" />
+    <issue id="MissingOnPlayFromSearch" severity="ignore" />
+</lint>
