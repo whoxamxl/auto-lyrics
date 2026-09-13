@@ -38,7 +38,12 @@ object PetitLyricsClient {
 
     data class PetitLyricsResult(
         val lyricsType: Int,
-        val lines: List<LyricLine>
+        val lines: List<LyricLine>,
+        val matchedTitle: String = "",
+        val matchedArtist: String = "",
+        val matchedAlbum: String = "",
+        val matchedDurationSec: Double? = null,
+        val lyricsId: String? = null
     )
 
     internal data class PetitLyricsCandidate(
@@ -47,7 +52,8 @@ object PetitLyricsClient {
         val artist: String,
         val album: String,
         val lyricsType: Int,
-        val lyricsData: String
+        val lyricsData: String,
+        val durationSec: Double? = null
     )
 
     private data class SearchQuery(
@@ -128,7 +134,7 @@ object PetitLyricsClient {
                 val payload = decoded.toString(Charsets.UTF_8)
                 val lines = parseWordSyncPayload(payload)
                 lines.takeIf { it.isNotEmpty() }?.let {
-                    PetitLyricsResult(lyricsType = 3, lines = it)
+                    buildResult(candidate, lyricsType = 3, lines = it)
                 }
             }
 
@@ -139,12 +145,28 @@ object PetitLyricsClient {
                     plainTextBase64 = plainCandidate.lyricsData
                 )
                 lines.takeIf { it.isNotEmpty() }?.let {
-                    PetitLyricsResult(lyricsType = 2, lines = it)
+                    buildResult(candidate, lyricsType = 2, lines = it)
                 }
             }
 
             else -> null
         }
+    }
+
+    private fun buildResult(
+        candidate: PetitLyricsCandidate,
+        lyricsType: Int,
+        lines: List<LyricLine>
+    ): PetitLyricsResult {
+        return PetitLyricsResult(
+            lyricsType = lyricsType,
+            lines = lines,
+            matchedTitle = candidate.title,
+            matchedArtist = candidate.artist,
+            matchedAlbum = candidate.album,
+            matchedDurationSec = candidate.durationSec,
+            lyricsId = candidate.lyricsId
+        )
     }
 
     private fun fetchPlainLyricsFor(candidate: PetitLyricsCandidate): PetitLyricsCandidate? {
@@ -289,7 +311,9 @@ object PetitLyricsClient {
                 artist = childText(song, "artist").orEmpty(),
                 album = childText(song, "album").orEmpty(),
                 lyricsType = lyricsType,
-                lyricsData = lyricsData
+                lyricsData = lyricsData,
+                durationSec = childText(song, "duration")?.toDoubleOrNull()
+                    ?: childText(song, "trackDuration")?.toDoubleOrNull()
             )
         }
         return result
