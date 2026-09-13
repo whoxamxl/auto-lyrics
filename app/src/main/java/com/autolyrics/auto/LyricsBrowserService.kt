@@ -13,6 +13,8 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media.MediaBrowserServiceCompat
+import androidx.media.utils.MediaConstants
+import com.autolyrics.R
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
@@ -40,6 +42,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
     private var aaKaraokeEnabled = true
     private var aaOffsetMs = 0L
+    private var customBrowseActionLimit = 0
 
     private var lastKaraokeLineIdx = -1
     private var lastKaraokeWordIdx = -1
@@ -64,8 +67,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val LYRICS_MENU_ID = "lyrics_menu"
         private const val SYNC_MENU_ID = "sync_menu"
         private const val MORE_MENU_ID = "more_menu"
-        private const val SYNC_MINUS_ID = "sync_minus"
-        private const val SYNC_PLUS_ID = "sync_plus"
+        private const val SYNC_INFO_ID = "sync_info"
+        private const val ACTION_SYNC_DELAY = "com.autolyrics.action.AA_SYNC_DELAY"
+        private const val ACTION_SYNC_ADVANCE = "com.autolyrics.action.AA_SYNC_ADVANCE"
         private const val SYNC_STEP_MS = 50L
         private const val SYNC_WINDOW_SIZE = 3
         private const val DEFAULT_WINDOW_SIZE = 5
@@ -147,7 +151,19 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         clientUid: Int,
         rootHints: Bundle?
     ): BrowserRoot {
-        return BrowserRoot(ROOT_ID, null)
+        customBrowseActionLimit = rootHints?.getInt(
+            MediaConstants.BROWSER_ROOT_HINTS_KEY_CUSTOM_BROWSER_ACTION_LIMIT,
+            0
+        ) ?: 0
+
+        val rootExtras = Bundle()
+        if (customBrowseActionLimit > 0) {
+            rootExtras.putParcelableArrayList(
+                MediaConstants.BROWSER_SERVICE_EXTRAS_KEY_CUSTOM_BROWSER_ACTION_ROOT_LIST,
+                createCustomBrowseActions()
+            )
+        }
+        return BrowserRoot(ROOT_ID, rootExtras)
     }
 
     override fun onLoadChildren(
@@ -163,16 +179,89 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 // the default browse tab. Sync is a secondary utility and More is
                 // reserved for detailed track/provider information.
                 items.add(buildBrowsableItem(LYRICS_MENU_ID, "Lyrics", "Current lyrics"))
-                items.add(buildBrowsableItem(SYNC_MENU_ID, "Sync", "Adjust offset"))
+                items.add(
+                    buildBrowsableItem(
+                        SYNC_MENU_ID,
+                        "Sync",
+                        "Adjust Android Auto lyric timing",
+                        syncBrowseActionIds()
+                    )
+                )
                 items.add(buildBrowsableItem(MORE_MENU_ID, "More", "Track and lyrics details"))
             }
             LYRICS_MENU_ID -> buildLyricsMenu(state, items)
             SYNC_MENU_ID -> buildSyncMenu(state, items)
             MORE_MENU_ID -> buildMoreMenu(state, items)
-            SYNC_MINUS_ID, SYNC_PLUS_ID -> Unit
         }
 
         result.sendResult(items)
+    }
+
+    override fun onLoadItem(
+        itemId: String,
+        result: Result<MediaBrowserCompat.MediaItem>
+    ) {
+        when (itemId) {
+            SYNC_MENU_ID -> {
+                result.sendResult(
+                    buildBrowsableItem(
+                        SYNC_MENU_ID,
+                        "Sync",
+                        syncOffsetDescription(),
+                        syncBrowseActionIds()
+                    )
+                )
+            }
+            LYRICS_MENU_ID -> {
+                result.sendResult(buildBrowsableItem(LYRICS_MENU_ID, "Lyrics", "Current lyrics"))
+            }
+            MORE_MENU_ID -> {
+                result.sendResult(buildBrowsableItem(MORE_MENU_ID, "More", "Track and lyrics details"))
+            }
+            else -> super.onLoadItem(itemId, result)
+        }
+    }
+
+    override fun onCustomAction(
+        action: String,
+        extras: Bundle?,
+        result: Result<Bundle>
+    ) {
+        val delta = when (action) {
+            ACTION_SYNC_DELAY -> -SYNC_STEP_MS
+            ACTION_SYNC_ADVANCE -> SYNC_STEP_MS
+            else -> {
+                super.onCustomAction(action, extras, result)
+                return
+            }
+        }
+
+        aaOffsetMs += delta
+        getSharedPreferences("auto_lyrics_prefs", MODE_PRIVATE)
+            .edit()
+            .putLong("aa_offset_ms", aaOffsetMs)
+            .apply()
+
+        // Refresh both the Sync node metadata and its lyric window without invoking
+        // playback. The SharedPreferences listener also keeps the phone settings in sync.
+        forceRefresh()
+
+        val mediaId = extras
+            ?.getString(MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_MEDIA_ITEM_ID)
+            ?.takeIf { it.isNotBlank() }
+            ?: SYNC_MENU_ID
+        val sign = if (aaOffsetMs >= 0) "+" else ""
+        val resultBundle = Bundle().apply {
+            putString(
+                MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_RESULT_MESSAGE,
+                "AA Sync: $sign${aaOffsetMs} ms"
+            )
+            putString(
+                MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_RESULT_REFRESH_ITEM,
+                mediaId
+            )
+        }
+        result.sendResult(resultBundle)
     }
 
     private fun buildLyricsMenu(
@@ -235,13 +324,11 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         state: LyricsState,
         items: MutableList<MediaBrowserCompat.MediaItem>
     ) {
-        val sign = if (aaOffsetMs >= 0) "+" else ""
-        items.add(buildTextItem("sync_offset", "AA Offset: ${sign}${aaOffsetMs}ms"))
         items.add(
-            buildTextItem(
-                SYNC_MINUS_ID,
-                "◀◀  Delay lyrics",
-                subtitle = "−${SYNC_STEP_MS} ms"
+            buildStaticTextItem(
+                SYNC_INFO_ID,
+                "AA Sync",
+                description = syncOffsetDescription()
             )
         )
 
@@ -272,7 +359,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 }
                 val trans = state.translatedLines?.getOrNull(i)?.takeIf { it.isNotBlank() }
                 items.add(
-                    buildTextItem(
+                    buildStaticTextItem(
                         "sync_line_$i",
                         "${linePrefix(isCurrent)}$text",
                         pad = true,
@@ -280,15 +367,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                     )
                 )
             }
+        } else {
+            items.add(buildStaticTextItem("sync_no_lyrics", "No lyrics loaded"))
         }
-
-        items.add(
-            buildTextItem(
-                SYNC_PLUS_ID,
-                "▶▶  Advance lyrics",
-                subtitle = "+${SYNC_STEP_MS} ms"
-            )
-        )
     }
 
     private fun buildMoreMenu(
@@ -430,7 +511,12 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun buildTextItem(id: String, text: String, pad: Boolean = false, subtitle: String? = null): MediaBrowserCompat.MediaItem {
+    private fun buildTextItem(
+        id: String,
+        text: String,
+        pad: Boolean = false,
+        subtitle: String? = null
+    ): MediaBrowserCompat.MediaItem {
         val title = if (pad) text.padEnd(PAD_WIDTH) else text
         val builder = MediaDescriptionCompat.Builder()
             .setMediaId(id)
@@ -442,15 +528,85 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         )
     }
 
-    private fun buildBrowsableItem(id: String, title: String, subtitle: String): MediaBrowserCompat.MediaItem {
+    private fun buildStaticTextItem(
+        id: String,
+        text: String,
+        pad: Boolean = false,
+        subtitle: String? = null,
+        description: String? = null
+    ): MediaBrowserCompat.MediaItem {
+        val title = if (pad) text.padEnd(PAD_WIDTH) else text
+        val builder = MediaDescriptionCompat.Builder()
+            .setMediaId(id)
+            .setTitle(title)
+        if (!subtitle.isNullOrBlank()) builder.setSubtitle(subtitle)
+        if (!description.isNullOrBlank()) builder.setDescription(description)
+        return MediaBrowserCompat.MediaItem(builder.build(), 0)
+    }
+
+    private fun buildBrowsableItem(
+        id: String,
+        title: String,
+        subtitle: String,
+        browseActionIds: ArrayList<String> = arrayListOf()
+    ): MediaBrowserCompat.MediaItem {
+        val builder = MediaDescriptionCompat.Builder()
+            .setMediaId(id)
+            .setTitle(title)
+            .setSubtitle(subtitle)
+
+        if (browseActionIds.isNotEmpty()) {
+            builder.setExtras(
+                Bundle().apply {
+                    putStringArrayList(
+                        MediaConstants.DESCRIPTION_EXTRAS_KEY_CUSTOM_BROWSER_ACTION_ID_LIST,
+                        browseActionIds
+                    )
+                }
+            )
+        }
+
         return MediaBrowserCompat.MediaItem(
-            MediaDescriptionCompat.Builder()
-                .setMediaId(id)
-                .setTitle(title)
-                .setSubtitle(subtitle)
-                .build(),
+            builder.build(),
             MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
         )
+    }
+
+    private fun createCustomBrowseActions(): ArrayList<Bundle> = arrayListOf(
+        buildCustomBrowseAction(
+            ACTION_SYNC_DELAY,
+            "Delay ${SYNC_STEP_MS} ms",
+            R.drawable.ic_sync_delay
+        ),
+        buildCustomBrowseAction(
+            ACTION_SYNC_ADVANCE,
+            "Advance ${SYNC_STEP_MS} ms",
+            R.drawable.ic_sync_advance
+        )
+    )
+
+    private fun buildCustomBrowseAction(
+        actionId: String,
+        label: String,
+        iconResId: Int
+    ): Bundle = Bundle().apply {
+        putString(MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_ID, actionId)
+        putString(MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_LABEL, label)
+        putString(
+            MediaConstants.EXTRAS_KEY_CUSTOM_BROWSER_ACTION_ICON_URI,
+            "android.resource://$packageName/$iconResId"
+        )
+    }
+
+    private fun syncBrowseActionIds(): ArrayList<String> {
+        if (customBrowseActionLimit <= 0) return arrayListOf()
+        val actions = listOf(ACTION_SYNC_DELAY, ACTION_SYNC_ADVANCE)
+        return ArrayList(actions.take(customBrowseActionLimit.coerceAtMost(actions.size)))
+    }
+
+    private fun syncOffsetDescription(): String {
+        val sign = if (aaOffsetMs >= 0) "+" else ""
+        return "Offset $sign${aaOffsetMs} ms · ${SYNC_STEP_MS} ms steps"
     }
 
     private fun lyricsTypeLabel(state: LyricsState): String {
@@ -814,18 +970,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         }
 
         override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
-            if (mediaId == null) return
-
-            if (mediaId == SYNC_MINUS_ID || mediaId == SYNC_PLUS_ID) {
-                if (mediaId == SYNC_MINUS_ID) aaOffsetMs -= SYNC_STEP_MS
-                else aaOffsetMs += SYNC_STEP_MS
-                getSharedPreferences("auto_lyrics_prefs", MODE_PRIVATE)
-                    .edit().putLong("aa_offset_ms", aaOffsetMs).apply()
-                notifyBrowseSections()
-                return
-            }
-
-            if (!mediaId.startsWith("line_")) return
+            if (mediaId == null || !mediaId.startsWith("line_")) return
             val index = mediaId.removePrefix("line_").toIntOrNull() ?: return
             val state = mediaTracker.state.value
             if (state.status != LyricsStatus.FOUND) return
