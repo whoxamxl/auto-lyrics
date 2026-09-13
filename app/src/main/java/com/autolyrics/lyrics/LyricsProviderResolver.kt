@@ -1,0 +1,302 @@
+package com.autolyrics.lyrics
+
+import com.autolyrics.model.LyricLine
+import com.autolyrics.model.LyricsStatus
+import com.autolyrics.model.TrackInfo
+
+/**
+ * A normalized candidate returned by a lyrics provider.
+ *
+ * Provider-specific search logic is still responsible for finding a plausible
+ * song. This model lets Auto Lyrics compare the final LRCLIB and PetitLyrics
+ * candidates with one scoring system instead of treating either provider as an
+ * unconditional first choice.
+ */
+data class LyricsProviderCandidate(
+    val provider: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationSec: Double?,
+    val lines: List<LyricLine>,
+    val status: LyricsStatus,
+    val source: String,
+    val syncKind: SyncKind
+) {
+    enum class SyncKind {
+        WORD_SYNC,
+        LINE_SYNC,
+        PLAIN
+    }
+}
+
+data class LyricsProviderScore(
+    val candidate: LyricsProviderCandidate,
+    val metadataScore: Double,
+    val qualityScore: Double,
+    val sourceConfidence: Double,
+    val finalScore: Double
+)
+
+object LyricsProviderResolver {
+
+    private const val MIN_METADATA_SCORE = 0.70
+    private const val MIN_TITLE_SCORE = 0.60
+    private const val MIN_ARTIST_SCORE = 0.40
+
+    private const val METADATA_WEIGHT = 0.82
+    private const val QUALITY_WEIGHT = 0.10
+    private const val SOURCE_WEIGHT = 0.08
+
+    private val JAPANESE_SCRIPT = Regex("[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]")
+    private val LATIN_SCRIPT = Regex("[A-Za-z]")
+
+    fun selectBest(
+        track: TrackInfo,
+        candidates: Collection<LyricsProviderCandidate>
+    ): LyricsProviderScore? {
+        val scored = scoreCandidates(track, candidates)
+
+        // A synchronized candidate always beats plain lyrics. Plain LRCLIB text
+        // remains a last-resort fallback when neither provider has usable timing.
+        return scored
+            .filter { it.candidate.status == LyricsStatus.FOUND }
+            .maxByOrNull { it.finalScore }
+            ?: scored
+                .filter { it.candidate.status == LyricsStatus.PLAIN_ONLY }
+                .maxByOrNull { it.finalScore }
+    }
+
+    fun scoreCandidates(
+        track: TrackInfo,
+        candidates: Collection<LyricsProviderCandidate>
+    ): List<LyricsProviderScore> {
+        return candidates.mapNotNull { candidate ->
+            val metadata = metadataScore(track, candidate) ?: return@mapNotNull null
+            if (metadata < MIN_METADATA_SCORE) return@mapNotNull null
+
+            val quality = lyricsQualityScore(candidate, track.durationMs)
+            val confidence = sourceConfidence(track, candidate)
+            val final = (
+                metadata * METADATA_WEIGHT +
+                    quality * QUALITY_WEIGHT +
+                    confidence * SOURCE_WEIGHT
+                ).coerceIn(0.0, 1.0)
+
+            LyricsProviderScore(
+                candidate = candidate,
+                metadataScore = metadata,
+                qualityScore = quality,
+                sourceConfidence = confidence,
+                finalScore = final
+            )
+        }
+    }
+
+    internal fun metadataScore(
+        track: TrackInfo,
+        candidate: LyricsProviderCandidate
+    ): Double? {
+        if (!LrcLibClient.versionsCompatible(track.title, candidate.title)) return null
+
+        val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
+        if (titleScore < MIN_TITLE_SCORE) return null
+
+        val durationSec = if (track.durationMs > 0L) track.durationMs / 1000.0 else null
+        val durationScore = if (durationSec != null && candidate.durationSec != null) {
+            LrcLibClient.durationSimilarity(durationSec.toInt(), candidate.durationSec)
+        } else {
+            null
+        }
+        if (durationScore != null && durationScore < 0.0) return null
+
+        val rawArtistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
+            LrcLibClient.stringSimilarity(track.artist, candidate.artist)
+        } else {
+            null
+        }
+
+        // Media sessions often romanize a Japanese artist while PetitLyrics keeps
+        // the native spelling. With an essentially exact title, a Latin-vs-Japanese
+        // script mismatch is "not comparable", rather than evidence of a wrong
+        // artist. Same-script artist mismatches are still rejected normally.
+        val artistScore = if (
+            rawArtistScore != null &&
+            rawArtistScore < MIN_ARTIST_SCORE &&
+            titleScore >= 0.95 &&
+            scriptsClearlyDifferent(track.artist, candidate.artist)
+        ) {
+            null
+        } else {
+            rawArtistScore
+        }
+
+        if (artistScore != null && artistScore < MIN_ARTIST_SCORE) {
+            val strongTitleAndDuration = titleScore >= 0.95 && (durationScore ?: 0.0) >= 0.85
+            if (!strongTitleAndDuration) return null
+        }
+
+        val albumScore = if (
+            track.album.isNotBlank() &&
+            candidate.album.isNotBlank() &&
+            candidate.album != "-"
+        ) {
+            val raw = LrcLibClient.stringSimilarity(track.album, candidate.album)
+            if (raw < 0.20 && scriptsClearlyDifferent(track.album, candidate.album)) null else raw
+        } else {
+            null
+        }
+
+        var weighted = titleScore * 0.55
+        var totalWeight = 0.55
+
+        if (artistScore != null) {
+            weighted += artistScore * 0.30
+            totalWeight += 0.30
+        }
+        if (durationScore != null) {
+            weighted += durationScore * 0.12
+            totalWeight += 0.12
+        }
+        if (albumScore != null) {
+            weighted += albumScore * 0.03
+            totalWeight += 0.03
+        }
+
+        return (weighted / totalWeight).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Scores the payload itself, independently from song metadata.
+     *
+     * The main penalty currently detects a common LRCLIB failure mode for
+     * Japanese songs: native Japanese lines interleaved with Latin-only
+     * transliterations as if they were additional timed lyric lines. Occasional
+     * genuine English phrases are intentionally tolerated; the penalty only
+     * becomes meaningful when Latin-only lines are frequent and repeatedly
+     * alternate with Japanese lines.
+     */
+    internal fun lyricsQualityScore(
+        candidate: LyricsProviderCandidate,
+        trackDurationMs: Long
+    ): Double {
+        if (candidate.lines.isEmpty()) return 0.0
+
+        val useful = candidate.lines
+            .map { it.text.trim() }
+            .filter { it.isNotBlank() && it != "♪" }
+        if (useful.isEmpty()) return 0.0
+
+        var quality = 1.0
+
+        val classes = useful.map { text ->
+            val japanese = JAPANESE_SCRIPT.containsMatchIn(text)
+            val latin = LATIN_SCRIPT.containsMatchIn(text)
+            when {
+                japanese -> ScriptClass.JAPANESE
+                latin -> ScriptClass.LATIN_ONLY
+                else -> ScriptClass.OTHER
+            }
+        }
+
+        val japaneseCount = classes.count { it == ScriptClass.JAPANESE }
+        val latinOnlyCount = classes.count { it == ScriptClass.LATIN_ONLY }
+        val linguisticCount = japaneseCount + latinOnlyCount
+
+        if (japaneseCount >= 3 && latinOnlyCount >= 2 && linguisticCount >= 6) {
+            val latinRatio = latinOnlyCount.toDouble() / linguisticCount.toDouble()
+
+            var alternatingPairs = 0
+            var classifiedPairs = 0
+            for (i in 1 until classes.size) {
+                val previous = classes[i - 1]
+                val current = classes[i]
+                if (previous == ScriptClass.OTHER || current == ScriptClass.OTHER) continue
+                classifiedPairs++
+                if (previous != current) alternatingPairs++
+            }
+            val alternatingRatio = if (classifiedPairs > 0) {
+                alternatingPairs.toDouble() / classifiedPairs.toDouble()
+            } else {
+                0.0
+            }
+
+            if (latinRatio >= 0.18 && alternatingRatio >= 0.25) {
+                val ratioStrength = ((latinRatio - 0.18) / 0.32).coerceIn(0.0, 1.0)
+                val alternatingStrength = ((alternatingRatio - 0.25) / 0.55).coerceIn(0.0, 1.0)
+                val contamination = ratioStrength * 0.60 + alternatingStrength * 0.40
+                quality -= 0.48 * contamination
+            }
+        }
+
+        if (candidate.status == LyricsStatus.FOUND && trackDurationMs > 0L) {
+            val timed = candidate.lines.filter { it.timeMs >= 0L }.sortedBy { it.timeMs }
+            val first = timed.firstOrNull()?.timeMs
+            val last = timed.lastOrNull()?.timeMs
+
+            if (last != null && last > trackDurationMs + 20_000L) {
+                quality -= 0.25
+            }
+            if (last != null && timed.size >= 10 && last < trackDurationMs * 0.50) {
+                quality -= 0.15
+            }
+            if (first != null && first > 75_000L) {
+                quality -= 0.08
+            }
+        }
+
+        return quality.coerceIn(0.0, 1.0)
+    }
+
+    internal fun sourceConfidence(
+        track: TrackInfo,
+        candidate: LyricsProviderCandidate
+    ): Double {
+        val japaneseTrack = containsJapanese(track.title) ||
+            containsJapanese(track.artist) ||
+            containsJapanese(track.album)
+
+        return if (japaneseTrack) {
+            when {
+                candidate.provider.equals("PetitLyrics", ignoreCase = true) &&
+                    candidate.syncKind == LyricsProviderCandidate.SyncKind.WORD_SYNC -> 1.00
+                candidate.provider.equals("PetitLyrics", ignoreCase = true) &&
+                    candidate.syncKind == LyricsProviderCandidate.SyncKind.LINE_SYNC -> 0.96
+                candidate.provider.equals("LRCLIB", ignoreCase = true) &&
+                    candidate.status == LyricsStatus.FOUND -> 0.78
+                candidate.status == LyricsStatus.PLAIN_ONLY -> 0.55
+                else -> 0.75
+            }
+        } else {
+            when {
+                candidate.provider.equals("LRCLIB", ignoreCase = true) &&
+                    candidate.status == LyricsStatus.FOUND -> 1.00
+                candidate.provider.equals("PetitLyrics", ignoreCase = true) &&
+                    candidate.syncKind == LyricsProviderCandidate.SyncKind.WORD_SYNC -> 0.92
+                candidate.provider.equals("PetitLyrics", ignoreCase = true) &&
+                    candidate.syncKind == LyricsProviderCandidate.SyncKind.LINE_SYNC -> 0.88
+                candidate.status == LyricsStatus.PLAIN_ONLY -> 0.55
+                else -> 0.80
+            }
+        }
+    }
+
+    private fun scriptsClearlyDifferent(left: String, right: String): Boolean {
+        if (left.isBlank() || right.isBlank()) return false
+        val leftJapanese = containsJapanese(left)
+        val rightJapanese = containsJapanese(right)
+        val leftLatin = LATIN_SCRIPT.containsMatchIn(left)
+        val rightLatin = LATIN_SCRIPT.containsMatchIn(right)
+
+        return (leftJapanese && !leftLatin && rightLatin && !rightJapanese) ||
+            (rightJapanese && !rightLatin && leftLatin && !leftJapanese)
+    }
+
+    private fun containsJapanese(value: String): Boolean = JAPANESE_SCRIPT.containsMatchIn(value)
+
+    private enum class ScriptClass {
+        JAPANESE,
+        LATIN_ONLY,
+        OTHER
+    }
+}
