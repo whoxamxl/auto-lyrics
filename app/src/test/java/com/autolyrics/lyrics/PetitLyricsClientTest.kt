@@ -118,7 +118,7 @@ class PetitLyricsClientTest {
     }
 
     @Test
-    fun exactJapaneseTitleAllowsRomanizedArtistMismatch() {
+    fun exactJapaneseTitleAllowsRomanizedArtistMismatchWithAlbumEvidence() {
         val encoded = Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4))
         val response = """
             <result>
@@ -167,6 +167,42 @@ class PetitLyricsClientTest {
                 requestedAlbum = ""
             )
         )
+    }
+
+    @Test
+    fun plainCompanionWithoutLyricsIdUsesMetadataInsteadOfFirstResult() {
+        val synced = PetitLyricsClient.PetitLyricsCandidate(
+            lyricsId = null,
+            title = "同じタイトル",
+            artist = "正しい歌手",
+            album = "正しいアルバム",
+            lyricsType = 2,
+            lyricsData = "AA=="
+        )
+        val wrongFirst = PetitLyricsClient.PetitLyricsCandidate(
+            lyricsId = null,
+            title = "同じタイトル",
+            artist = "別の歌手",
+            album = "別のアルバム",
+            lyricsType = 1,
+            lyricsData = "V3Jvbmc="
+        )
+        val correctSecond = PetitLyricsClient.PetitLyricsCandidate(
+            lyricsId = null,
+            title = "同じタイトル",
+            artist = "正しい歌手",
+            album = "正しいアルバム",
+            lyricsType = 1,
+            lyricsData = "Q29ycmVjdA=="
+        )
+
+        val selected = PetitLyricsClient.selectPlainCompanion(
+            syncedCandidate = synced,
+            plainCandidates = listOf(wrongFirst, correctSecond)
+        )
+
+        assertEquals("正しい歌手", selected?.artist)
+        assertEquals("Q29ycmVjdA==", selected?.lyricsData)
     }
 
     @Test
