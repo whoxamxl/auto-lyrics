@@ -70,6 +70,8 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val DEFAULT_WINDOW_SIZE = 5
         private const val TRANSLATED_WINDOW_SIZE = 3
         private const val CURRENT_LINE_PREFIX = "▶  "
+        // Em + en spacing approximates the rendered width of the current-line marker
+        // so lyric text starts at the same x-position on surrounding rows.
         private const val IDLE_LINE_PREFIX = "\u2003\u2002"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
