@@ -4,6 +4,7 @@ import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,7 +86,7 @@ class LyricsProviderResolverTest {
     }
 
     @Test
-    fun romanizedArtistVsJapaneseArtistIsNeutralWhenTitleIsExact() {
+    fun romanizedArtistVsJapaneseArtistIsNeutralWithAlbumEvidence() {
         val track = TrackInfo("巡恋歌", "Tsuyoshi Nagabuchi", "風は南から", 215_000L)
         val petit = candidate(
             provider = "PetitLyrics",
@@ -99,6 +100,21 @@ class LyricsProviderResolverTest {
         val metadata = LyricsProviderResolver.metadataScore(track, petit)
 
         assertTrue(metadata != null && metadata > 0.95)
+    }
+
+    @Test
+    fun crossScriptArtistMismatchWithoutSecondaryEvidenceIsRejected() {
+        val track = TrackInfo("同じタイトル", "Romanized Artist", "", 200_000L)
+        val petit = candidate(
+            provider = "PetitLyrics",
+            title = "同じタイトル",
+            artist = "別の歌手",
+            album = "",
+            durationSec = null,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC
+        )
+
+        assertNull(LyricsProviderResolver.metadataScore(track, petit))
     }
 
     @Test
