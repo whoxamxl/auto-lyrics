@@ -61,12 +61,19 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
     companion object {
         private const val ROOT_ID = "root"
+        private const val LYRICS_MENU_ID = "lyrics_menu"
         private const val SYNC_MENU_ID = "sync_menu"
+        private const val MORE_MENU_ID = "more_menu"
         private const val SYNC_MINUS_ID = "sync_minus"
         private const val SYNC_PLUS_ID = "sync_plus"
         private const val SYNC_STEP_MS = 50L
-        private const val WINDOW_SIZE = 3
-        private const val PLAIN_WINDOW_SIZE = 4
+        private const val SYNC_WINDOW_SIZE = 3
+        private const val DEFAULT_WINDOW_SIZE = 5
+        private const val TRANSLATED_WINDOW_SIZE = 3
+        private const val CURRENT_LINE_PREFIX = "▶  "
+        // Em + en spacing approximates the rendered width of the current-line marker
+        // so lyric text starts at the same x-position on surrounding rows.
+        private const val IDLE_LINE_PREFIX = "\u2003\u2002"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
         private const val BROWSE_KARAOKE_WINDOW_MS = 600L
@@ -150,17 +157,28 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val state = mediaTracker.state.value
         val items = mutableListOf<MediaBrowserCompat.MediaItem>()
 
-        if (parentId == SYNC_MENU_ID) {
-            buildSyncMenu(state, items)
-            result.sendResult(items)
-            return
+        when (parentId) {
+            ROOT_ID -> {
+                // Keep the primary lyrics view first so Android Auto selects it as
+                // the default browse tab. Sync is a secondary utility and More is
+                // reserved for detailed track/provider information.
+                items.add(buildBrowsableItem(LYRICS_MENU_ID, "Lyrics", "Current lyrics"))
+                items.add(buildBrowsableItem(SYNC_MENU_ID, "Sync", "Adjust offset"))
+                items.add(buildBrowsableItem(MORE_MENU_ID, "More", "Track and lyrics details"))
+            }
+            LYRICS_MENU_ID -> buildLyricsMenu(state, items)
+            SYNC_MENU_ID -> buildSyncMenu(state, items)
+            MORE_MENU_ID -> buildMoreMenu(state, items)
+            SYNC_MINUS_ID, SYNC_PLUS_ID -> Unit
         }
 
-        if (parentId == SYNC_MINUS_ID || parentId == SYNC_PLUS_ID) {
-            result.sendResult(items)
-            return
-        }
+        result.sendResult(items)
+    }
 
+    private fun buildLyricsMenu(
+        state: LyricsState,
+        items: MutableList<MediaBrowserCompat.MediaItem>
+    ) {
         when (state.status) {
             LyricsStatus.NO_MEDIA -> {
                 items.add(buildTextItem("no_media", "Play a song to see lyrics"))
@@ -180,7 +198,6 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             LyricsStatus.FOUND -> {
                 addTrackHeader(state, items)
                 buildWindowedLyrics(state, items)
-                items.add(buildBrowsableItem(SYNC_MENU_ID, "⟳ Sync", "Adjust offset"))
             }
             LyricsStatus.PLAIN_ONLY -> {
                 addTrackHeader(state, items)
@@ -197,22 +214,21 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                             .coerceIn(0, state.lines.size - 1)
                     } else { 0 }
 
-                    val half = PLAIN_WINDOW_SIZE / 2
+                    val windowSize = browseWindowSize(state)
+                    val half = windowSize / 2
                     val winStart = maxOf(0, estimatedIdx - half)
-                    val winEnd = minOf(state.lines.size, winStart + PLAIN_WINDOW_SIZE)
-                    val adjStart = maxOf(0, winEnd - PLAIN_WINDOW_SIZE)
+                    val winEnd = minOf(state.lines.size, winStart + windowSize)
+                    val adjStart = maxOf(0, winEnd - windowSize)
 
                     for (i in adjStart until winEnd) {
                         val text = state.lines[i].text.ifBlank { "♪" }
+                        val prefix = linePrefix(i == estimatedIdx)
                         val trans = state.translatedLines?.getOrNull(i)?.takeIf { it.isNotBlank() }
-                        items.add(buildTextItem("line_$i", "    $text", pad = true, subtitle = trans))
+                        items.add(buildTextItem("line_$i", "$prefix$text", pad = true, subtitle = trans))
                     }
                 }
-                items.add(buildBrowsableItem(SYNC_MENU_ID, "⟳ Sync", "Adjust offset"))
             }
         }
-
-        result.sendResult(items)
     }
 
     private fun buildSyncMenu(
@@ -234,20 +250,79 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 } else 0
             }
 
-            val curLine = state.lines.getOrNull(idx)
-            val curText = if (curLine != null && aaKaraokeEnabled && curLine.words.isNotEmpty()) {
-                buildKaraokeText(curLine, idx, posMs, BROWSE_KARAOKE_WINDOW_MS)
-            } else {
-                curLine?.text ?: "♪"
+            val half = SYNC_WINDOW_SIZE / 2
+            val windowStart = maxOf(0, idx - half)
+            val windowEnd = minOf(state.lines.size, windowStart + SYNC_WINDOW_SIZE)
+            val adjustedStart = maxOf(0, windowEnd - SYNC_WINDOW_SIZE)
+
+            for (i in adjustedStart until windowEnd) {
+                val line = state.lines[i]
+                val isCurrent = i == idx
+                val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
+                    buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
+                } else {
+                    line.text.ifBlank { "♪" }
+                }
+                val trans = state.translatedLines?.getOrNull(i)?.takeIf { it.isNotBlank() }
+                items.add(
+                    buildTextItem(
+                        "sync_line_$i",
+                        "${linePrefix(isCurrent)}$text",
+                        pad = true,
+                        subtitle = trans
+                    )
+                )
             }
-            val curTrans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_cur", "▶  $curText", pad = true, subtitle = curTrans))
-            val nextTrans = state.translatedLines?.getOrNull(idx + 1)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_next", "    ${state.lines.getOrNull(idx + 1)?.text ?: ""}", pad = true, subtitle = nextTrans))
         }
 
         items.add(buildTextItem(SYNC_MINUS_ID, "⏪  − 50ms"))
         items.add(buildTextItem(SYNC_PLUS_ID, "⏩  + 50ms"))
+    }
+
+    private fun buildMoreMenu(
+        state: LyricsState,
+        items: MutableList<MediaBrowserCompat.MediaItem>
+    ) {
+        val track = state.track
+        if (track == null) {
+            items.add(buildTextItem("more_no_media", "Play a song to see details"))
+            return
+        }
+
+        items.add(buildTextItem("more_title", "Title", subtitle = track.title))
+        if (track.artist.isNotBlank()) {
+            items.add(buildTextItem("more_artist", "Artist", subtitle = track.artist))
+        }
+        if (track.album.isNotBlank()) {
+            items.add(buildTextItem("more_album", "Album", subtitle = track.album))
+        }
+
+        val provider = state.source
+            .substringBefore("·")
+            .substringBefore("(")
+            .trim()
+            .ifBlank { "—" }
+        items.add(buildTextItem("more_provider", "Provider", subtitle = provider))
+
+        val syncStatus = when (state.status) {
+            LyricsStatus.FOUND -> "Synced"
+            LyricsStatus.PLAIN_ONLY -> "Not synced"
+            LyricsStatus.LOADING -> "Loading"
+            LyricsStatus.NOT_FOUND -> "Not found"
+            LyricsStatus.ERROR -> "Error"
+            LyricsStatus.NO_MEDIA -> "—"
+        }
+        items.add(buildTextItem("more_sync", "Lyrics", subtitle = syncStatus))
+
+        state.detectedLanguage?.takeIf { it.isNotBlank() }?.let { language ->
+            items.add(buildTextItem("more_language", "Language", subtitle = language.uppercase()))
+        }
+        if (track.durationMs > 0) {
+            items.add(buildTextItem("more_duration", "Duration", subtitle = formatTime(track.durationMs)))
+        }
+
+        val sign = if (aaOffsetMs >= 0) "+" else ""
+        items.add(buildTextItem("more_offset", "AA Offset", subtitle = "${sign}${aaOffsetMs}ms"))
     }
 
     private fun addTrackHeader(
@@ -299,6 +374,15 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         return "%d:%02d".format(min, sec)
     }
 
+    private fun browseWindowSize(state: LyricsState): Int {
+        val hasTranslation = state.translatedLines?.any { it.isNotBlank() } == true
+        return if (hasTranslation) TRANSLATED_WINDOW_SIZE else DEFAULT_WINDOW_SIZE
+    }
+
+    private fun linePrefix(isCurrent: Boolean): String {
+        return if (isCurrent) CURRENT_LINE_PREFIX else IDLE_LINE_PREFIX
+    }
+
     private fun buildWindowedLyrics(
         state: LyricsState,
         items: MutableList<MediaBrowserCompat.MediaItem>
@@ -311,16 +395,17 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
         val posMs = getAaPositionMs()
         val aaCurrentIdx = findLineIndex(lines, posMs).coerceAtLeast(0)
-        val half = WINDOW_SIZE / 2
+        val windowSize = browseWindowSize(state)
+        val half = windowSize / 2
 
         val windowStart = maxOf(0, aaCurrentIdx - half)
-        val windowEnd = minOf(lines.size, windowStart + WINDOW_SIZE)
-        val adjustedStart = maxOf(0, windowEnd - WINDOW_SIZE)
+        val windowEnd = minOf(lines.size, windowStart + windowSize)
+        val adjustedStart = maxOf(0, windowEnd - windowSize)
 
         for (i in adjustedStart until windowEnd) {
             val line = lines[i]
             val isCurrent = i == aaCurrentIdx
-            val prefix = if (isCurrent) "▶  " else "    "
+            val prefix = linePrefix(isCurrent)
 
             val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
                 buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
@@ -448,8 +533,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 } else {
                     line.text
                 }
+                val markedOriginal = "$CURRENT_LINE_PREFIX$original"
                 val trans = state.translatedLines?.getOrNull(lineIdx)?.takeIf { it.isNotBlank() }
-                return if (trans != null) "$original\n$trans" else original
+                return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
             }
         }
 
@@ -460,8 +546,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                     .coerceIn(0, state.lines.size - 1)
             } else { 0 }
             val original = state.lines[idx].text
+            val markedOriginal = "$CURRENT_LINE_PREFIX$original"
             val trans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            return if (trans != null) "$original\n$trans" else original
+            return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
         }
 
         return when (state.status) {
@@ -597,12 +684,18 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             findLineIndex(lines, posMs).coerceAtLeast(0)
         }
 
-        val winSize = if (isPlain) PLAIN_WINDOW_SIZE else WINDOW_SIZE
+        val winSize = browseWindowSize(state)
         val half = winSize / 2
         val windowStart = maxOf(0, currentIdx - half)
         val windowEnd = minOf(lines.size, windowStart + winSize)
         val adjustedStart = maxOf(0, windowEnd - winSize)
         return WindowInfo(adjustedStart, windowEnd, currentIdx)
+    }
+
+    private fun notifyBrowseSections() {
+        notifyChildrenChanged(LYRICS_MENU_ID)
+        notifyChildrenChanged(SYNC_MENU_ID)
+        notifyChildrenChanged(MORE_MENU_ID)
     }
 
     private fun forceRefresh() {
@@ -612,8 +705,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         displayedSource = null
         lastNotifyTime = 0L
         resetKaraokeState()
-        notifyChildrenChanged(ROOT_ID)
-        notifyChildrenChanged(SYNC_MENU_ID)
+        notifyBrowseSections()
     }
 
     private fun throttledNotifyChildren(state: LyricsState) {
@@ -632,8 +724,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             handler.removeCallbacksAndMessages(null)
             pendingNotify = false
             resetKaraokeState()
-            notifyChildrenChanged(ROOT_ID)
-            notifyChildrenChanged(SYNC_MENU_ID)
+            notifyBrowseSections()
             return
         }
 
@@ -656,15 +747,13 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
         if (elapsed >= NOTIFY_THROTTLE_MS) {
             lastNotifyTime = now
-            notifyChildrenChanged(ROOT_ID)
-            notifyChildrenChanged(SYNC_MENU_ID)
+            notifyBrowseSections()
         } else if (!pendingNotify) {
             pendingNotify = true
             handler.postDelayed({
                 pendingNotify = false
                 lastNotifyTime = System.currentTimeMillis()
-                notifyChildrenChanged(ROOT_ID)
-                notifyChildrenChanged(SYNC_MENU_ID)
+                notifyBrowseSections()
             }, NOTIFY_THROTTLE_MS - elapsed)
         }
     }
@@ -720,8 +809,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 else aaOffsetMs += SYNC_STEP_MS
                 getSharedPreferences("auto_lyrics_prefs", MODE_PRIVATE)
                     .edit().putLong("aa_offset_ms", aaOffsetMs).apply()
-                notifyChildrenChanged(ROOT_ID)
-                notifyChildrenChanged(SYNC_MENU_ID)
+                notifyBrowseSections()
                 return
             }
 
