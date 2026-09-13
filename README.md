@@ -180,4 +180,4 @@ adb logcat -s "ProviderResolver:D" "PetitLyrics:D" "*:S"
 
 ## License
 
-MIT
+This repository currently does not contain a `LICENSE` file, and the upstream repository does not declare a GitHub-detected license. Do not infer redistribution terms from this README; licensing should be clarified explicitly before redistribution or publication beyond the repository's existing use.
