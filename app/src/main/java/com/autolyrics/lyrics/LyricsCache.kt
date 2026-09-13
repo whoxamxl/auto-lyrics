@@ -35,7 +35,8 @@ class LyricsCache(context: Context) {
 
     data class CachedWord(
         val timeMs: Long,
-        val text: String
+        val text: String,
+        val endTimeMs: Long? = null
     )
 
     fun get(track: TrackInfo): Triple<List<LyricLine>, LyricsStatus, String>? {
@@ -54,7 +55,13 @@ class LyricsCache(context: Context) {
                 LyricLine(
                     timeMs = cl.timeMs,
                     text = cl.text,
-                    words = cl.words.map { cw -> LyricWord(cw.timeMs, cw.text) }
+                    words = cl.words.map { cw ->
+                        LyricWord(
+                            timeMs = cw.timeMs,
+                            text = cw.text,
+                            endTimeMs = cw.endTimeMs
+                        )
+                    }
                 )
             }
             Triple(lines, status, cached.source)
@@ -77,7 +84,13 @@ class LyricsCache(context: Context) {
                     CachedLine(
                         timeMs = line.timeMs,
                         text = line.text,
-                        words = line.words.map { w -> CachedWord(w.timeMs, w.text) }
+                        words = line.words.map { w ->
+                            CachedWord(
+                                timeMs = w.timeMs,
+                                text = w.text,
+                                endTimeMs = w.endTimeMs
+                            )
+                        }
                     )
                 },
                 status = status.name,
@@ -124,7 +137,7 @@ class LyricsCache(context: Context) {
         }
 
         val key = listOf(
-            "v11",
+            "v12",
             normalizeKeyPart(track.title),
             normalizeKeyPart(track.artist),
             normalizeKeyPart(track.album),
