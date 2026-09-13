@@ -677,35 +677,136 @@
                 style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
 
-        <!-- Phone Sync reset action -->
+        <!-- Quick offset row with Reset centered between delay and advance presets -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="end"
-            android:paddingEnd="16dp"
-            android:layout_marginTop="4dp">
+            android:gravity="center"
+            android:paddingTop="6dp">
 
             <Button
-                android:id="@+id/btn_delay_reset"
+                android:id="@+id/btn_quick_minus_1s"
                 android:layout_width="wrap_content"
-                android:layout_height="32dp"
-                android:text="⟳ Reset"
+                android:layout_height="30dp"
+                android:text="−1s"
                 android:textSize="10sp"
-                android:textColor="#D7A0A8"
-                android:backgroundTint="#4A252C"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
                 android:textAllCaps="false"
                 android:minWidth="0dp"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_minus_half"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="−0.5s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_minus_tenth"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="−0.1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_delay_reset"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="⟳ Reset"
+                android:textSize="9sp"
+                android:textColor="#D7A0A8"
+                android:backgroundTint="#4A252C"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="4dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp"
                 android:enabled="false"
                 android:alpha="0.35"
                 style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_tenth"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+0.1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="4dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_half"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+0.5s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_1s"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
 
-        <!-- Sync tools row -->
+        <!-- Tap to Sync row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -730,7 +831,7 @@
                 style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
 
-        <!-- Sync status (full-width below buttons for readability) -->
+        <!-- Sync status (full-width below Tap to Sync for readability) -->
         <TextView
             android:id="@+id/tv_sync_status"
             android:layout_width="match_parent"
@@ -744,116 +845,6 @@
             android:textSize="14sp"
             android:lineSpacingMultiplier="1.2"
             android:visibility="gone" />
-
-        <!-- Quick offset row -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:paddingTop="4dp">
-
-            <Button
-                android:id="@+id/btn_quick_minus_1s"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="−1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_minus_half"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="−0.5s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="4dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_minus_tenth"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="−0.1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="4dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_plus_tenth"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="+0.1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="4dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_plus_half"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="+0.5s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="4dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_plus_1s"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="+1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="4dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                style="?attr/materialButtonOutlinedStyle" />
-        </LinearLayout>
     </LinearLayout>
 
 </LinearLayout>
