@@ -12,6 +12,11 @@ import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,10 +60,21 @@ object LyricsTranslator {
     private const val MODEL_CHECK_TIMEOUT_MS = 10_000L
     private const val MODEL_POLL_LOG_INTERVAL = 5
 
+    // Model downloads belong to application-level translation infrastructure rather
+    // than to one track. This scope deliberately survives cancellation of a track's
+    // translationJob so changing to English/no-lyrics content cannot stop the model
+    // download monitor or its timeout/retry state.
+    private val modelDownloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // ML Kit model download Tasks are not cancellable by coroutines. Keep the active
     // Task per language so changing tracks only replaces the waiter; the underlying
     // model download continues and the newest track can reuse it.
     private val activeModelDownloads = ConcurrentHashMap<String, Task<Void>>()
+
+    // The polling/timeout monitor is also shared per language and runs in the
+    // application-level scope above. Awaiting it from a track coroutine does not make
+    // the monitor a child of that track coroutine.
+    private val activeModelMonitors = ConcurrentHashMap<String, Deferred<Boolean>>()
 
     // A retryable failure stays latched until the user explicitly presses Retry.
     // This prevents every track change from silently re-running a failed model
@@ -74,11 +90,25 @@ object LyricsTranslator {
     }
 
     fun prepareManualRetry() {
-        if (retryRequired.isNotEmpty()) {
-            Log.d(TAG, "manual retry enabled; clearing ${retryRequired.size} retry gate(s)")
+        val retryStates = retryRequired.values.toList()
+        if (retryStates.isNotEmpty()) {
+            Log.d(TAG, "manual retry enabled; clearing ${retryStates.size} retry gate(s)")
             retryRequired.clear()
         }
         resetUiState()
+
+        // Restart model monitoring independently of the current song. This matters
+        // when Retry is pressed while the current track is English or has no lyrics.
+        retryStates
+            .filter {
+                it.phase == Phase.DOWNLOAD_FAILED ||
+                    it.phase == Phase.DOWNLOAD_TIMED_OUT
+            }
+            .mapNotNull { it.sourceLanguage }
+            .distinct()
+            .forEach { language ->
+                startModelDownloadMonitor(language)
+            }
     }
 
     suspend fun translateLines(lines: List<LyricLine>): TranslationResult? {
@@ -162,37 +192,24 @@ object LyricsTranslator {
             Log.d(TAG, "translation model already downloaded: $mlLang")
         } else {
             Log.d(TAG, "translation model missing; ensuring explicit download: $mlLang")
-            updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = langCode)
             try {
                 val becameAvailable = waitForModelDownload(
                     manager = remoteModelManager,
                     model = remoteModel,
                     languageKey = mlLang,
+                    sourceLanguage = langCode,
                     conditions = DownloadConditions.Builder().build()
                 )
                 if (!becameAvailable) {
-                    val reason = "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min"
-                    Log.e(TAG, reason)
-                    markRetryRequired(
-                        language = langCode,
-                        phase = Phase.DOWNLOAD_TIMED_OUT,
-                        reason = reason
-                    )
+                    // The shared monitor owns timeout/failure state, including Retry.
                     return null
                 }
                 retryRequired.remove(langCode)
                 Log.d(TAG, "translation model confirmed available: $mlLang")
             } catch (e: CancellationException) {
+                // Only this track's waiter is cancelled. The application-level model
+                // monitor keeps running and continues updating/logging download state.
                 throw e
-            } catch (e: Exception) {
-                val reason = e.localizedMessage ?: e.javaClass.simpleName
-                Log.e(TAG, "translation model download failed", e)
-                markRetryRequired(
-                    language = langCode,
-                    phase = Phase.DOWNLOAD_FAILED,
-                    reason = reason
-                )
-                return null
             }
         }
 
@@ -348,28 +365,114 @@ object LyricsTranslator {
         }
     }
 
+    private fun startModelDownloadMonitor(sourceLanguage: String): Deferred<Boolean>? {
+        val mlLang = TranslateLanguage.fromLanguageTag(sourceLanguage) ?: return null
+        val manager = RemoteModelManager.getInstance()
+        val model = TranslateRemoteModel.Builder(mlLang).build()
+        return getOrStartModelMonitor(
+            manager = manager,
+            model = model,
+            languageKey = mlLang,
+            sourceLanguage = sourceLanguage,
+            conditions = DownloadConditions.Builder().build()
+        )
+    }
+
+    private fun getOrStartModelMonitor(
+        manager: RemoteModelManager,
+        model: TranslateRemoteModel,
+        languageKey: String,
+        sourceLanguage: String,
+        conditions: DownloadConditions
+    ): Deferred<Boolean> {
+        synchronized(activeModelMonitors) {
+            activeModelMonitors[languageKey]?.let { existing ->
+                if (!existing.isCompleted) {
+                    Log.d(TAG, "reusing active model download monitor: $languageKey")
+                    return existing
+                }
+                activeModelMonitors.remove(languageKey, existing)
+            }
+
+            val monitor = modelDownloadScope.async {
+                monitorModelDownload(
+                    manager = manager,
+                    model = model,
+                    languageKey = languageKey,
+                    sourceLanguage = sourceLanguage,
+                    conditions = conditions
+                )
+            }
+            activeModelMonitors[languageKey] = monitor
+            monitor.invokeOnCompletion {
+                activeModelMonitors.remove(languageKey, monitor)
+            }
+            return monitor
+        }
+    }
+
     private suspend fun waitForModelDownload(
         manager: RemoteModelManager,
         model: TranslateRemoteModel,
         languageKey: String,
+        sourceLanguage: String,
+        conditions: DownloadConditions
+    ): Boolean {
+        val monitor = getOrStartModelMonitor(
+            manager = manager,
+            model = model,
+            languageKey = languageKey,
+            sourceLanguage = sourceLanguage,
+            conditions = conditions
+        )
+        return monitor.await()
+    }
+
+    private suspend fun monitorModelDownload(
+        manager: RemoteModelManager,
+        model: TranslateRemoteModel,
+        languageKey: String,
+        sourceLanguage: String,
         conditions: DownloadConditions
     ): Boolean {
         val task = getOrStartDownloadTask(manager, model, languageKey, conditions)
         val startedAt = SystemClock.elapsedRealtime()
         var pollCount = 0
 
+        updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = sourceLanguage)
+
         while (SystemClock.elapsedRealtime() - startedAt < MODEL_DOWNLOAD_TIMEOUT_MS) {
+            // Re-publish the download state so a track change to English/no-lyrics
+            // cannot make the Phone UI look as though the background model download
+            // has stopped. The progress indicator remains indeterminate by design.
+            updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = sourceLanguage)
+
             val downloaded = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
                 isModelDownloaded(manager, model)
             }
             if (downloaded == true) {
                 Log.d(TAG, "model became available while polling: $languageKey")
                 activeModelDownloads.remove(languageKey, task)
+                retryRequired.remove(sourceLanguage)
+                if (_uiState.value.phase == Phase.DOWNLOADING_MODEL &&
+                    _uiState.value.sourceLanguage == sourceLanguage
+                ) {
+                    resetUiState()
+                }
                 return true
             }
 
             if (task.isComplete && !task.isSuccessful) {
-                throw task.exception ?: IllegalStateException("Model download task failed")
+                val reason = task.exception?.localizedMessage
+                    ?: task.exception?.javaClass?.simpleName
+                    ?: "Model download task failed"
+                Log.e(TAG, "translation model download failed: $languageKey", task.exception)
+                markRetryRequired(
+                    language = sourceLanguage,
+                    phase = Phase.DOWNLOAD_FAILED,
+                    reason = reason
+                )
+                return false
             }
 
             pollCount++
@@ -385,15 +488,30 @@ object LyricsTranslator {
         }
 
         // One final authoritative check before showing Retry. The underlying ML Kit
-        // Task may finish independently of the coroutine timeout/polling cadence.
+        // Task may finish independently of the polling cadence.
         val finalDownloaded = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
             isModelDownloaded(manager, model)
         } == true
         if (finalDownloaded) {
             Log.d(TAG, "model became available on final check: $languageKey")
             activeModelDownloads.remove(languageKey, task)
+            retryRequired.remove(sourceLanguage)
+            if (_uiState.value.phase == Phase.DOWNLOADING_MODEL &&
+                _uiState.value.sourceLanguage == sourceLanguage
+            ) {
+                resetUiState()
+            }
+            return true
         }
-        return finalDownloaded
+
+        val reason = "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min"
+        Log.e(TAG, reason)
+        markRetryRequired(
+            language = sourceLanguage,
+            phase = Phase.DOWNLOAD_TIMED_OUT,
+            reason = reason
+        )
+        return false
     }
 
     private suspend fun translateText(
