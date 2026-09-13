@@ -222,7 +222,7 @@ class MainActivity : AppCompatActivity() {
             updateAaDelayDisplay()
 
             Snackbar.make(rootLayout, "AA Sync reset", Snackbar.LENGTH_LONG)
-                .setAction("Undo") {
+                .setAction("↩ Undo") {
                     aaOffsetMs = previousOffset
                     prefs.edit().putLong(AA_OFFSET_PREF_KEY, previousOffset).apply()
                     updateAaDelayDisplay()
