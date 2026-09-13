@@ -35,6 +35,25 @@ jobs:
         with:
           gradle-version: '8.4'
 
+      - name: Validate PetitLyrics release configuration
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          missing=()
+          for name in \
+            PETITLYRICS_USER_ID \
+            PETITLYRICS_APP_NAME \
+            PETITLYRICS_PKG_NAME \
+            PETITLYRICS_CLIENT_APP_ID; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required PetitLyrics release secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Run unit tests
         run: gradle testDebugUnitTest
 
