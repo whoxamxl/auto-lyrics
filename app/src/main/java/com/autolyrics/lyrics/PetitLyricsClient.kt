@@ -3,6 +3,8 @@ package com.autolyrics.lyrics
 import android.util.Log
 import com.autolyrics.BuildConfig
 import com.autolyrics.model.LyricLine
+import com.autolyrics.model.LyricsStatus
+import com.autolyrics.model.TrackInfo
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,11 +31,12 @@ object PetitLyricsClient {
     private const val ENDPOINT = "https://on.petitlyrics.com/api/GetPetitLyricsData.php"
     private const val SDK_VERSION = "1.3.4"
     private const val SEARCH_MAX_COUNT = 10
-    private const val MIN_TITLE_SCORE = 0.72
+    private const val MIN_PROVIDER_METADATA_SCORE = 0.70
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
         .build()
 
     data class PetitLyricsResult(
@@ -84,7 +87,7 @@ object PetitLyricsClient {
 
         // PetitLyrics metadata frequently uses Japanese artist names while media
         // sessions may expose romanized names. Start strict, then progressively
-        // relax album/artist constraints while keeping title matching local.
+        // relax album/artist constraints while keeping candidate validation local.
         val queries = linkedSetOf(
             SearchQuery(artist = artist, album = album, label = "title+artist+album"),
             SearchQuery(artist = artist, album = "", label = "title+artist"),
@@ -172,15 +175,15 @@ object PetitLyricsClient {
     private fun fetchPlainLyricsFor(candidate: PetitLyricsCandidate): PetitLyricsCandidate? {
         candidate.lyricsId?.takeIf { it.isNotBlank() }?.let { lyricsId ->
             val byId = requestCandidatesById(lyricsId, lyricsType = 1)
-            byId.firstOrNull { it.lyricsType == 1 && it.lyricsData.isNotBlank() }?.let {
+            selectPlainCompanion(candidate, byId)?.let {
                 debugLog("line-sync companion text resolved by lyricsId=$lyricsId")
                 return it
             }
         }
 
-        // Fallback for responses that omit lyricsId: query using the metadata that
-        // came back from PetitLyrics itself, not the potentially romanized player
-        // metadata.
+        // Fallback for responses that omit lyricsId, or if the ID lookup failed:
+        // query using provider-native metadata and rank with the same metadata
+        // resolver used for final cross-provider selection.
         val byMetadata = requestCandidates(
             title = candidate.title,
             artist = candidate.artist,
@@ -190,15 +193,28 @@ object PetitLyricsClient {
             logLabel = "line-sync-text"
         )
 
-        return byMetadata.firstOrNull { plain ->
-            plain.lyricsType == 1 &&
-                plain.lyricsData.isNotBlank() &&
-                (candidate.lyricsId == null || plain.lyricsId == candidate.lyricsId)
-        } ?: byMetadata.firstOrNull { plain ->
-            plain.lyricsType == 1 &&
-                plain.lyricsData.isNotBlank() &&
-                normalizeForMatch(plain.title) == normalizeForMatch(candidate.title)
+        return selectPlainCompanion(candidate, byMetadata)
+    }
+
+    internal fun selectPlainCompanion(
+        syncedCandidate: PetitLyricsCandidate,
+        plainCandidates: List<PetitLyricsCandidate>
+    ): PetitLyricsCandidate? {
+        val usable = plainCandidates.filter {
+            it.lyricsType == 1 && it.lyricsData.isNotBlank()
         }
+        if (usable.isEmpty()) return null
+
+        syncedCandidate.lyricsId?.takeIf { it.isNotBlank() }?.let { lyricsId ->
+            usable.firstOrNull { it.lyricsId == lyricsId }?.let { return it }
+        }
+
+        return rankCandidates(
+            candidates = usable,
+            requestedTitle = syncedCandidate.title,
+            requestedArtist = syncedCandidate.artist,
+            requestedAlbum = syncedCandidate.album
+        ).firstOrNull()
     }
 
     private fun requestCandidates(
@@ -334,58 +350,46 @@ object PetitLyricsClient {
         requestedArtist: String,
         requestedAlbum: String
     ): List<PetitLyricsCandidate> {
+        val track = TrackInfo(
+            title = requestedTitle,
+            artist = requestedArtist,
+            album = requestedAlbum,
+            durationMs = 0L
+        )
+
         return candidates.mapIndexedNotNull { index, candidate ->
-            scoreCandidate(candidate, requestedTitle, requestedArtist, requestedAlbum)
-                ?.let { score -> Triple(candidate, score, index) }
+            val normalized = LyricsProviderCandidate(
+                provider = "PetitLyrics",
+                title = candidate.title.ifBlank { requestedTitle },
+                artist = candidate.artist,
+                album = candidate.album,
+                durationSec = null,
+                lines = listOf(LyricLine(0L, "candidate")),
+                status = LyricsStatus.FOUND,
+                source = "PetitLyrics · candidate",
+                syncKind = when (candidate.lyricsType) {
+                    3 -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+                    2 -> LyricsProviderCandidate.SyncKind.LINE_SYNC
+                    else -> LyricsProviderCandidate.SyncKind.PLAIN
+                }
+            )
+            val score = LyricsProviderResolver.metadataScore(track, normalized)
+                ?: return@mapIndexedNotNull null
+            if (score < MIN_PROVIDER_METADATA_SCORE) return@mapIndexedNotNull null
+            Triple(candidate, score, index)
         }
             .sortedWith(
                 compareByDescending<Triple<PetitLyricsCandidate, Double, Int>> { it.second }
+                    .thenByDescending { syncPreference(it.first.lyricsType) }
                     .thenBy { it.third }
             )
             .map { it.first }
     }
 
-    private fun scoreCandidate(
-        candidate: PetitLyricsCandidate,
-        requestedTitle: String,
-        requestedArtist: String,
-        requestedAlbum: String
-    ): Double? {
-        val candidateTitle = candidate.title.ifBlank { requestedTitle }
-        if (!LrcLibClient.versionsCompatible(requestedTitle, candidateTitle)) return null
-
-        val titleScore = stringSimilarity(requestedTitle, candidateTitle)
-        if (titleScore < MIN_TITLE_SCORE) return null
-
-        val artistScore = if (requestedArtist.isNotBlank() && candidate.artist.isNotBlank()) {
-            stringSimilarity(requestedArtist, candidate.artist)
-        } else null
-        val albumScore = if (requestedAlbum.isNotBlank() && candidate.album.isNotBlank()) {
-            stringSimilarity(requestedAlbum, candidate.album)
-        } else null
-
-        // A non-exact title plus a clearly different artist is too risky. Exact
-        // titles remain eligible even when the artist is a Japanese/romanized
-        // script mismatch (e.g. 長渕 剛 vs Tsuyoshi Nagabuchi).
-        if (titleScore < 0.95 && artistScore != null && artistScore < 0.30) return null
-
-        var weighted = titleScore * 0.80
-        var weight = 0.80
-        if (artistScore != null) {
-            weighted += artistScore * 0.12
-            weight += 0.12
-        }
-        if (albumScore != null) {
-            weighted += albumScore * 0.08
-            weight += 0.08
-        }
-
-        val syncBonus = when (candidate.lyricsType) {
-            3 -> 0.015
-            2 -> 0.010
-            else -> 0.0
-        }
-        return (weighted / weight) + syncBonus
+    private fun syncPreference(lyricsType: Int): Int = when (lyricsType) {
+        3 -> 2
+        2 -> 1
+        else -> 0
     }
 
     internal fun parseWordSyncPayload(xml: String): List<LyricLine> {
