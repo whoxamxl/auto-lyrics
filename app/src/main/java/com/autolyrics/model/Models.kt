@@ -11,7 +11,8 @@ data class TrackInfo(
 
 data class LyricWord(
     val timeMs: Long,
-    val text: String
+    val text: String,
+    val endTimeMs: Long? = null
 )
 
 data class LyricLine(
