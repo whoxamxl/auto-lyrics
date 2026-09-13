@@ -36,6 +36,11 @@ class PetitLyricsClientTest {
             <result>
               <songs>
                 <song>
+                  <lyricsId>42</lyricsId>
+                  <title>Test Song</title>
+                  <artist>Test Artist</artist>
+                  <album>Test Album</album>
+                  <duration>123.4</duration>
                   <lyricsType>3</lyricsType>
                   <lyricsData>$encoded</lyricsData>
                 </song>
@@ -51,6 +56,11 @@ class PetitLyricsClientTest {
         assertEquals("Alpha line", result?.lines?.get(0)?.text)
         assertEquals(3400L, result?.lines?.get(1)?.timeMs)
         assertEquals("Beta line", result?.lines?.get(1)?.text)
+        assertEquals("Test Song", result?.matchedTitle)
+        assertEquals("Test Artist", result?.matchedArtist)
+        assertEquals("Test Album", result?.matchedAlbum)
+        assertEquals(123.4, result?.matchedDurationSec ?: 0.0, 0.001)
+        assertEquals("42", result?.lyricsId)
     }
 
     @Test
