@@ -44,6 +44,7 @@ object LyricsProviderResolver {
     private const val MIN_METADATA_SCORE = 0.70
     private const val MIN_TITLE_SCORE = 0.60
     private const val MIN_ARTIST_SCORE = 0.40
+    private const val CROSS_SCRIPT_ALBUM_EVIDENCE = 0.65
 
     private const val METADATA_WEIGHT = 0.82
     private const val QUALITY_WEIGHT = 0.10
@@ -119,32 +120,6 @@ object LyricsProviderResolver {
         }
         if (durationScore != null && durationScore < 0.0) return null
 
-        val rawArtistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
-            LrcLibClient.stringSimilarity(track.artist, candidate.artist)
-        } else {
-            null
-        }
-
-        // Media sessions often romanize a Japanese artist while PetitLyrics keeps
-        // the native spelling. With an essentially exact title, a Latin-vs-Japanese
-        // script mismatch is "not comparable", rather than evidence of a wrong
-        // artist. Same-script artist mismatches are still rejected normally.
-        val artistScore = if (
-            rawArtistScore != null &&
-            rawArtistScore < MIN_ARTIST_SCORE &&
-            titleScore >= 0.95 &&
-            scriptsClearlyDifferent(track.artist, candidate.artist)
-        ) {
-            null
-        } else {
-            rawArtistScore
-        }
-
-        if (artistScore != null && artistScore < MIN_ARTIST_SCORE) {
-            val strongTitleAndDuration = titleScore >= 0.95 && (durationScore ?: 0.0) >= 0.85
-            if (!strongTitleAndDuration) return null
-        }
-
         val albumScore = if (
             track.album.isNotBlank() &&
             candidate.album.isNotBlank() &&
@@ -154,6 +129,36 @@ object LyricsProviderResolver {
             if (raw < 0.20 && scriptsClearlyDifferent(track.album, candidate.album)) null else raw
         } else {
             null
+        }
+
+        val rawArtistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
+            LrcLibClient.stringSimilarity(track.artist, candidate.artist)
+        } else {
+            null
+        }
+
+        // Romanized player metadata and native Japanese provider metadata are not
+        // directly comparable. Do not blindly neutralize that mismatch, though:
+        // an exact title alone is unsafe for covers/same-title songs. Require a
+        // second piece of evidence (matching album or strong duration) before the
+        // artist mismatch is treated as unknown rather than wrong.
+        val crossScriptArtist = rawArtistScore != null &&
+            rawArtistScore < MIN_ARTIST_SCORE &&
+            titleScore >= 0.95 &&
+            scriptsClearlyDifferent(track.artist, candidate.artist)
+        val secondaryEvidence =
+            (albumScore != null && albumScore >= CROSS_SCRIPT_ALBUM_EVIDENCE) ||
+                (durationScore != null && durationScore >= 0.85)
+
+        val artistScore = if (crossScriptArtist && secondaryEvidence) {
+            null
+        } else {
+            rawArtistScore
+        }
+
+        if (artistScore != null && artistScore < MIN_ARTIST_SCORE) {
+            val strongTitleAndDuration = titleScore >= 0.95 && (durationScore ?: 0.0) >= 0.85
+            if (!strongTitleAndDuration) return null
         }
 
         var weighted = titleScore * 0.55
