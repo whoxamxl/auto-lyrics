@@ -3,6 +3,7 @@ package com.autolyrics.lyrics
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
+import kotlin.math.abs
 
 /**
  * A normalized candidate returned by a lyrics provider.
@@ -102,8 +103,16 @@ object LyricsProviderResolver {
         val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
         if (titleScore < MIN_TITLE_SCORE) return null
 
+        // LRCLIB's duration field is documented and already used by its matcher.
+        // PetitLyrics duration fields vary across clients/responses, so do not let
+        // an ambiguous unit (seconds vs milliseconds) invalidate an otherwise
+        // strong PetitLyrics match.
         val durationSec = if (track.durationMs > 0L) track.durationMs / 1000.0 else null
-        val durationScore = if (durationSec != null && candidate.durationSec != null) {
+        val durationScore = if (
+            !candidate.provider.equals("PetitLyrics", ignoreCase = true) &&
+            durationSec != null &&
+            candidate.durationSec != null
+        ) {
             LrcLibClient.durationSimilarity(durationSec.toInt(), candidate.durationSec)
         } else {
             null
@@ -174,7 +183,8 @@ object LyricsProviderResolver {
      * transliterations as if they were additional timed lyric lines. Occasional
      * genuine English phrases are intentionally tolerated; the penalty only
      * becomes meaningful when Latin-only lines are frequent and repeatedly
-     * alternate with Japanese lines.
+     * alternate with Japanese lines. Adjacent Japanese/Latin lines sharing nearly
+     * the same timestamp are especially strong evidence of a transliteration copy.
      */
     internal fun lyricsQualityScore(
         candidate: LyricsProviderCandidate,
@@ -183,13 +193,13 @@ object LyricsProviderResolver {
         if (candidate.lines.isEmpty()) return 0.0
 
         val useful = candidate.lines
-            .map { it.text.trim() }
-            .filter { it.isNotBlank() && it != "♪" }
+            .filter { it.text.isNotBlank() && it.text.trim() != "♪" }
         if (useful.isEmpty()) return 0.0
 
         var quality = 1.0
 
-        val classes = useful.map { text ->
+        val classes = useful.map { line ->
+            val text = line.text.trim()
             val japanese = JAPANESE_SCRIPT.containsMatchIn(text)
             val latin = LATIN_SCRIPT.containsMatchIn(text)
             when {
@@ -208,24 +218,42 @@ object LyricsProviderResolver {
 
             var alternatingPairs = 0
             var classifiedPairs = 0
+            var nearDuplicateTimestampPairs = 0
             for (i in 1 until classes.size) {
                 val previous = classes[i - 1]
                 val current = classes[i]
                 if (previous == ScriptClass.OTHER || current == ScriptClass.OTHER) continue
                 classifiedPairs++
-                if (previous != current) alternatingPairs++
+                if (previous != current) {
+                    alternatingPairs++
+                    if (abs(useful[i].timeMs - useful[i - 1].timeMs) <= 750L) {
+                        nearDuplicateTimestampPairs++
+                    }
+                }
             }
             val alternatingRatio = if (classifiedPairs > 0) {
                 alternatingPairs.toDouble() / classifiedPairs.toDouble()
             } else {
                 0.0
             }
+            val duplicateTimestampRatio = if (alternatingPairs > 0) {
+                nearDuplicateTimestampPairs.toDouble() / alternatingPairs.toDouble()
+            } else {
+                0.0
+            }
 
-            if (latinRatio >= 0.18 && alternatingRatio >= 0.25) {
+            if (
+                latinRatio >= 0.18 &&
+                (alternatingRatio >= 0.25 || nearDuplicateTimestampPairs >= 2)
+            ) {
                 val ratioStrength = ((latinRatio - 0.18) / 0.32).coerceIn(0.0, 1.0)
                 val alternatingStrength = ((alternatingRatio - 0.25) / 0.55).coerceIn(0.0, 1.0)
-                val contamination = ratioStrength * 0.60 + alternatingStrength * 0.40
-                quality -= 0.48 * contamination
+                val duplicateStrength = duplicateTimestampRatio.coerceIn(0.0, 1.0)
+                val contamination =
+                    ratioStrength * 0.50 +
+                        alternatingStrength * 0.30 +
+                        duplicateStrength * 0.20
+                quality -= 0.52 * contamination
             }
         }
 
