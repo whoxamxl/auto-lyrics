@@ -461,12 +461,12 @@ class MainActivity : AppCompatActivity() {
                 ssb.append("    $translatedLine")
                 ssb.setSpan(
                     RelativeSizeSpan(0.8f),
-                    tlStart, sb.length,
+                    tlStart, ssb.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
                 ssb.setSpan(
                     ForegroundColorSpan(dimColor),
-                    tlStart, sb.length,
+                    tlStart, ssb.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
