@@ -12,6 +12,7 @@ This document describes the current implementation rather than the original LRCL
 | **Now-playing card** (AA) | Standard Android Auto media now-playing UI rendered from `MediaMetadataCompat`. Current lyrics are placed in the display subtitle. |
 | **Synced lyrics** | Timestamped lyrics represented by `LyricsStatus.FOUND`. |
 | **Plain lyrics** | Unsynchronized text represented by `LyricsStatus.PLAIN_ONLY`. |
+| **Word-synced lyrics** | Synced lyrics whose `LyricLine.words` contain per-word/phrase timing. PetitLyrics Type 3 supplies explicit start/end timing. |
 | **LRCLIB** | Provider supporting synchronized and plain results with documented duration metadata. |
 | **PetitLyrics** | Optional Japanese-oriented provider enabled by build-time client configuration. |
 | **Provider Resolver** | Common scorer used to validate and compare normalized provider candidates. |
@@ -28,6 +29,7 @@ AutoLyricsApp
        ├─ PetitLyricsClient ────────┤ parallel when configured
        ├─ LyricsProviderResolver ◀──┘
        ├─ LyricsCache
+       ├─ KaraokeTiming
        ├─ MetadataCleaner
        ├─ LrcParser
        ├─ LyricsTranslator
@@ -55,6 +57,8 @@ Android Auto
 `MediaTracker` extracts title, artist, album, duration, and artwork from the active media controller. Metadata is normalized by `MetadataCleaner` before a `TrackInfo` is created.
 
 Track changes are debounced by 600 ms before a new lookup starts. While playback is active, position is reconstructed from the media session's reported position, last update time, and playback speed. Synced lyric indices are checked every 150 ms.
+
+For word-synced lines, `KaraokeTiming.activeWordIndex()` selects the latest word whose start has been reached and whose explicit end has not passed. This means a real gap between PetitLyrics words produces `currentWordIndex = -1` instead of leaving the previous word highlighted. Formats without end timing retain the previous start-time-only behavior.
 
 The phone/global offset is included by `MediaTracker.getCurrentPositionMs()`. Android Auto applies its own additional `aa_offset_ms` inside `LyricsBrowserService`.
 
@@ -157,8 +161,19 @@ The PetitLyrics integration follows the request/response structure demonstrated 
 
 Supported formats:
 
-- **lyricsType=3 / WSY** — word-sync XML. Auto Lyrics currently uses the first word start time of each line as the line timestamp. It does not import the full per-word karaoke timing payload into `LyricWord`.
+- **lyricsType=3 / WSY** — word-sync XML. Auto Lyrics imports every non-empty `wordstring` into `LyricWord`, retains `starttime` and valid `endtime`, and uses the first timed word as the containing `LyricLine.timeMs`. `linestring` remains the canonical full-line text. PetitLyrics-authored whitespace in `wordstring` is preserved rather than trimmed or regenerated.
 - **lyricsType=2 / LSY** — binary line-sync timing. Auto Lyrics decodes the timing payload and combines it with a **lyricsType=1** plain-text companion, preferably resolved by the same `lyricsId`.
+
+Type 3 timed blank rows are retained as `♪` lines using their timing, but an empty `wordstring` is not materialized as an invisible karaoke token.
+
+The word renderer uses `KaraokeTiming.separatorFor()` to support both source styles:
+
+```text
+PetitLyrics WSY:  word strings already contain authored spacing → separator ""
+legacy tokenized: words reconstruct the line with spaces          → separator " "
+```
+
+This keeps Japanese WSY text from gaining artificial spaces while retaining compatibility with tokenized enhanced-LRC data.
 
 PetitLyrics search progressively relaxes:
 
@@ -216,12 +231,14 @@ These identifiers are compiled into Android `BuildConfig`. Keeping them in `.env
 Cache identity currently includes:
 
 ```text
-cache namespace (v11)
+cache namespace (v12)
 normalized title
 normalized artist
 normalized album
 rounded duration in seconds
 ```
+
+Namespace `v12` invalidates older cached Type 3 rows that were stored without per-word timing. Cached words now persist both start time and optional end time.
 
 A cached result is displayed immediately. Its per-entry `refreshAfterMs` decides whether a background provider comparison is needed.
 
@@ -265,6 +282,8 @@ For synchronized and plain lyrics:
 
 The current line is kept near the center where track boundaries allow it.
 
+When a line contains word timing and Android Auto karaoke is enabled, the current word/short look-ahead segment is marked with `【…】`. Explicit PetitLyrics `endtime` values suppress highlighting during real gaps between words. Provider-authored spacing is preserved.
+
 The track header includes artist, position/duration, synchronization state, provider, and detected language where available.
 
 ### Sync tab
@@ -301,6 +320,8 @@ More contains detail rows for the available metadata:
 ### Now-playing subtitle
 
 `MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE` carries the current lyric text. The original lyric line is prefixed with `▶`. When translation is available, it is placed on the second line without a second marker.
+
+Word-synced lines use the same Android Auto karaoke text generation as the browse rows. The helper is stateless, so seeking backward within a line recalculates the correct word instead of retaining a later highlight.
 
 ### Browse refresh behavior
 
@@ -366,9 +387,17 @@ Provider/matching regression cases should continue to cover:
 - Multi-contributor player metadata can match one exact contributor on a near-exact title.
 - Unrelated contributor does not become a valid artist match.
 - Japanese/Latin interleaved lyric payload receives a quality penalty.
-- PetitLyrics Type 3 parsing.
+- PetitLyrics Type 3 imports word start/end timing and preserves provider spacing.
+- Explicit Type 3 gaps do not leave the previous word highlighted.
 - PetitLyrics Type 2 timing decode + Type 1 companion selection.
 - Synchronized candidates outrank plain candidates.
+
+Manual phone/performance regression pass for word-sync changes:
+
+1. Type 3 track highlights the active word/phrase without inserted Japanese spaces.
+2. Highlight clears during a provider-authored gap between `endtime` and the next `starttime`.
+3. Seeking backward within the same line returns to the earlier word.
+4. Performance mode preserves the same source spacing as the main phone view.
 
 Manual DHU regression pass after Android Auto UI changes:
 
@@ -379,19 +408,21 @@ Manual DHU regression pass after Android Auto UI changes:
 5. `−50 ms` / `+50 ms` changes AA offset and refreshes the view.
 6. More shows current provider/details without affecting lyrics timing.
 7. Now-playing subtitle marks the current lyric with `▶`.
-8. Plain lyrics still advance and use the same current-row alignment.
+8. Word-synced Type 3 text preserves provider spacing and clears karaoke brackets in explicit timing gaps.
+9. Plain lyrics still advance and use the same current-row alignment.
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Active media tracking, provider concurrency/budgets, resolver orchestration, cache refresh policy. |
+| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Active media tracking, provider concurrency/budgets, resolver orchestration, cache refresh policy, current line/word state. |
 | `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB lookup, provider-specific matching, relaxed search. |
 | `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | PetitLyrics search, Type 3/Type 2 parsing, query provenance. |
+| `app/src/main/java/com/autolyrics/lyrics/KaraokeTiming.kt` | Shared active-word and source-spacing rules for word-synced rendering. |
 | `app/src/main/java/com/autolyrics/lyrics/LyricsProviderResolver.kt` | Common metadata/quality/source scoring and final provider selection. |
 | `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Persistent lyrics cache and per-entry refresh interval. |
 | `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Player metadata cleanup before provider search. |
-| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls. |
+| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls, word-karaoke text. |
 | `app/src/main/res/xml/automotive_app_desc.xml` | Declares the Android Auto media integration. |
 | `.env.example` | Local PetitLyrics template / no-`.env` fallback. |
 | `.github/workflows/build.yml` | CI, release build, release-secret injection/validation, GitHub Release creation. |
