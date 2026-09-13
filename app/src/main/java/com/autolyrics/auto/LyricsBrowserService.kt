@@ -67,8 +67,10 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val SYNC_MINUS_ID = "sync_minus"
         private const val SYNC_PLUS_ID = "sync_plus"
         private const val SYNC_STEP_MS = 50L
-        private const val WINDOW_SIZE = 3
-        private const val PLAIN_WINDOW_SIZE = 4
+        private const val DEFAULT_WINDOW_SIZE = 5
+        private const val TRANSLATED_WINDOW_SIZE = 3
+        private const val CURRENT_LINE_PREFIX = "▶  "
+        private const val IDLE_LINE_PREFIX = "\u2003\u2002"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
         private const val BROWSE_KARAOKE_WINDOW_MS = 600L
@@ -209,14 +211,15 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                             .coerceIn(0, state.lines.size - 1)
                     } else { 0 }
 
-                    val half = PLAIN_WINDOW_SIZE / 2
+                    val windowSize = browseWindowSize(state)
+                    val half = windowSize / 2
                     val winStart = maxOf(0, estimatedIdx - half)
-                    val winEnd = minOf(state.lines.size, winStart + PLAIN_WINDOW_SIZE)
-                    val adjStart = maxOf(0, winEnd - PLAIN_WINDOW_SIZE)
+                    val winEnd = minOf(state.lines.size, winStart + windowSize)
+                    val adjStart = maxOf(0, winEnd - windowSize)
 
                     for (i in adjStart until winEnd) {
                         val text = state.lines[i].text.ifBlank { "♪" }
-                        val prefix = if (i == estimatedIdx) "▶  " else "    "
+                        val prefix = linePrefix(i == estimatedIdx)
                         val trans = state.translatedLines?.getOrNull(i)?.takeIf { it.isNotBlank() }
                         items.add(buildTextItem("line_$i", "$prefix$text", pad = true, subtitle = trans))
                     }
@@ -251,9 +254,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 curLine?.text ?: "♪"
             }
             val curTrans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_cur", "▶  $curText", pad = true, subtitle = curTrans))
+            items.add(buildTextItem("sync_cur", "$CURRENT_LINE_PREFIX$curText", pad = true, subtitle = curTrans))
             val nextTrans = state.translatedLines?.getOrNull(idx + 1)?.takeIf { it.isNotBlank() }
-            items.add(buildTextItem("sync_next", "    ${state.lines.getOrNull(idx + 1)?.text ?: ""}", pad = true, subtitle = nextTrans))
+            items.add(buildTextItem("sync_next", "$IDLE_LINE_PREFIX${state.lines.getOrNull(idx + 1)?.text ?: ""}", pad = true, subtitle = nextTrans))
         }
 
         items.add(buildTextItem(SYNC_MINUS_ID, "⏪  − 50ms"))
@@ -355,6 +358,15 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         return "%d:%02d".format(min, sec)
     }
 
+    private fun browseWindowSize(state: LyricsState): Int {
+        val hasTranslation = state.translatedLines?.any { it.isNotBlank() } == true
+        return if (hasTranslation) TRANSLATED_WINDOW_SIZE else DEFAULT_WINDOW_SIZE
+    }
+
+    private fun linePrefix(isCurrent: Boolean): String {
+        return if (isCurrent) CURRENT_LINE_PREFIX else IDLE_LINE_PREFIX
+    }
+
     private fun buildWindowedLyrics(
         state: LyricsState,
         items: MutableList<MediaBrowserCompat.MediaItem>
@@ -367,16 +379,17 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
         val posMs = getAaPositionMs()
         val aaCurrentIdx = findLineIndex(lines, posMs).coerceAtLeast(0)
-        val half = WINDOW_SIZE / 2
+        val windowSize = browseWindowSize(state)
+        val half = windowSize / 2
 
         val windowStart = maxOf(0, aaCurrentIdx - half)
-        val windowEnd = minOf(lines.size, windowStart + WINDOW_SIZE)
-        val adjustedStart = maxOf(0, windowEnd - WINDOW_SIZE)
+        val windowEnd = minOf(lines.size, windowStart + windowSize)
+        val adjustedStart = maxOf(0, windowEnd - windowSize)
 
         for (i in adjustedStart until windowEnd) {
             val line = lines[i]
             val isCurrent = i == aaCurrentIdx
-            val prefix = if (isCurrent) "▶  " else "    "
+            val prefix = linePrefix(isCurrent)
 
             val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
                 buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
@@ -504,7 +517,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 } else {
                     line.text
                 }
-                val markedOriginal = "▶  $original"
+                val markedOriginal = "$CURRENT_LINE_PREFIX$original"
                 val trans = state.translatedLines?.getOrNull(lineIdx)?.takeIf { it.isNotBlank() }
                 return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
             }
@@ -517,7 +530,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                     .coerceIn(0, state.lines.size - 1)
             } else { 0 }
             val original = state.lines[idx].text
-            val markedOriginal = "▶  $original"
+            val markedOriginal = "$CURRENT_LINE_PREFIX$original"
             val trans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
             return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
         }
@@ -655,7 +668,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             findLineIndex(lines, posMs).coerceAtLeast(0)
         }
 
-        val winSize = if (isPlain) PLAIN_WINDOW_SIZE else WINDOW_SIZE
+        val winSize = browseWindowSize(state)
         val half = winSize / 2
         val windowStart = maxOf(0, currentIdx - half)
         val windowEnd = minOf(lines.size, windowStart + winSize)
