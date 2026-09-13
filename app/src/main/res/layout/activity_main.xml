@@ -184,14 +184,29 @@
             android:gravity="center_vertical">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Size"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_font_size"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Changes lyric text size on the Phone UI only." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_font_size_minus"
@@ -244,14 +259,29 @@
             android:layout_marginTop="8dp">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Font"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_font_family"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Changes the lyric font on the Phone UI only." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_font_sans"
@@ -346,12 +376,28 @@
             android:gravity="center_vertical">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Karaoke Mode"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_aa_karaoke"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Uses word-level timing for Android Auto karaoke display when word timing is available." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_aa_karaoke"
@@ -368,12 +414,28 @@
             android:layout_marginTop="8dp">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Translate Lyrics"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_translation"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Enables lyric translation when lyrics are loaded. Translated lines appear in both Phone UI and Android Auto." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_translation"
@@ -400,14 +462,29 @@
             android:gravity="center_vertical">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Offset"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_aa_offset"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Adjusts Android Auto lyric timing only. This offset is shared with the Android Auto Sync tab and is applied in addition to Phone Sync." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_aa_delay_minus"
@@ -467,7 +544,7 @@
                 android:id="@+id/btn_aa_delay_reset"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
-                android:text="Reset"
+                android:text="⟳ Reset"
                 android:textSize="10sp"
                 android:textColor="#D7A0A8"
                 android:backgroundTint="#4A252C"
