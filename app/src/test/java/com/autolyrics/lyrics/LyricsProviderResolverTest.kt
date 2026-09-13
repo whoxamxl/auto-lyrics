@@ -103,7 +103,30 @@ class LyricsProviderResolverTest {
     }
 
     @Test
-    fun crossScriptArtistMismatchWithoutSecondaryEvidenceIsRejected() {
+    fun artistConstrainedPetitLyricsQueryCorroboratesCrossScriptArtist() {
+        val track = TrackInfo(
+            title = "君を忘れない",
+            artist = "Chiharu Matsuyama",
+            album = "TOUR",
+            durationMs = 288_000L
+        )
+        val petit = candidate(
+            provider = "PetitLyrics",
+            title = "君を忘れない",
+            artist = "松山千春",
+            album = "別アルバム",
+            durationSec = null,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
+            artistQueryCorroborated = true
+        )
+
+        val metadata = LyricsProviderResolver.metadataScore(track, petit)
+
+        assertTrue(metadata != null && metadata > 0.90)
+    }
+
+    @Test
+    fun titleOnlyCrossScriptArtistMismatchWithoutSecondaryEvidenceIsRejected() {
         val track = TrackInfo("同じタイトル", "Romanized Artist", "", 200_000L)
         val petit = candidate(
             provider = "PetitLyrics",
@@ -111,7 +134,8 @@ class LyricsProviderResolverTest {
             artist = "別の歌手",
             album = "",
             durationSec = null,
-            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
+            artistQueryCorroborated = false
         )
 
         assertNull(LyricsProviderResolver.metadataScore(track, petit))
@@ -176,7 +200,8 @@ class LyricsProviderResolverTest {
         album: String,
         durationSec: Double?,
         status: LyricsStatus = LyricsStatus.FOUND,
-        syncKind: LyricsProviderCandidate.SyncKind
+        syncKind: LyricsProviderCandidate.SyncKind,
+        artistQueryCorroborated: Boolean = false
     ): LyricsProviderCandidate {
         return LyricsProviderCandidate(
             provider = provider,
@@ -192,7 +217,8 @@ class LyricsProviderResolverTest {
             ),
             status = status,
             source = "$provider · test",
-            syncKind = syncKind
+            syncKind = syncKind,
+            artistQueryCorroborated = artistQueryCorroborated
         )
     }
 }
