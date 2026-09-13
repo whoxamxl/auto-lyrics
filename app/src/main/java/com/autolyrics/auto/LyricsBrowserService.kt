@@ -155,6 +155,10 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             MediaConstants.BROWSER_ROOT_HINTS_KEY_CUSTOM_BROWSER_ACTION_LIMIT,
             0
         ) ?: 0
+        android.util.Log.i(
+            "LyricsBrowserService",
+            "Custom browse action limit=$customBrowseActionLimit client=$clientPackageName"
+        )
 
         val rootExtras = Bundle()
         if (customBrowseActionLimit > 0) {
@@ -328,7 +332,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             buildStaticTextItem(
                 SYNC_INFO_ID,
                 "AA Sync",
-                description = syncOffsetDescription()
+                subtitle = syncOffsetDescription()
             )
         )
 
