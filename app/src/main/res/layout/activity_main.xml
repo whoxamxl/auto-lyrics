@@ -129,7 +129,7 @@
             android:id="@+id/btn_performance_mode"
             android:layout_width="wrap_content"
             android:layout_height="34dp"
-            android:text="⚡ Performance"
+            android:text="⛶ Fullscreen Lyrics"
             android:textSize="11sp"
             android:textColor="#CCCCDD"
             android:backgroundTint="#2A2A3E"
@@ -166,6 +166,16 @@
         android:paddingBottom="10dp"
         android:visibility="gone">
 
+        <!-- Phone UI section title -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Phone UI"
+            android:textColor="#8888AA"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-medium"
+            android:layout_marginBottom="8dp" />
+
         <!-- Font size row -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -179,8 +189,24 @@
                 android:text="Size"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_font_size"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Changes lyric text size on the Phone UI only." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_font_size_minus"
@@ -202,7 +228,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="10dp"
                 android:layout_marginEnd="10dp"
-                android:text="16sp"
+                android:text="16 sp"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp"
                 android:fontFamily="sans-serif-medium"
@@ -238,8 +264,24 @@
                 android:text="Font"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_font_family"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Changes the lyric font on the Phone UI only." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_font_sans"
@@ -334,12 +376,28 @@
             android:gravity="center_vertical">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Karaoke Mode"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_aa_karaoke"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Uses word-level timing for Android Auto karaoke display when word timing is available." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_aa_karaoke"
@@ -356,12 +414,28 @@
             android:layout_marginTop="8dp">
 
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Translate Lyrics"
                 android:textColor="#CCCCDD"
                 android:textSize="13sp" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_translation"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Enables lyric translation when lyrics are loaded. Translated lines appear in both Phone UI and Android Auto." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_translation"
@@ -369,35 +443,63 @@
                 android:layout_height="wrap_content" />
         </LinearLayout>
 
-        <!-- AA Delay row -->
+        <!-- AA Sync section title -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AA Sync"
+            android:textColor="#8888AA"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-medium"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="8dp" />
+
+        <!-- AA Sync offset row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginTop="8dp">
+            android:gravity="center_vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="AA Sync"
+                android:text="Offset"
                 android:textColor="#8888AA"
                 android:textSize="12sp"
-                android:fontFamily="sans-serif-medium"
-                android:layout_marginEnd="12dp" />
+                android:fontFamily="sans-serif-medium" />
+
+            <com.autolyrics.ui.SettingInfoView
+                android:id="@+id/info_aa_offset"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="4dp"
+                android:text="ⓘ"
+                android:textColor="#777792"
+                android:textSize="12sp"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Adjusts Android Auto lyric timing only. This offset is shared with the Android Auto Sync tab and is applied in addition to Phone Sync." />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
             <Button
                 android:id="@+id/btn_aa_delay_minus"
-                android:layout_width="38dp"
+                android:layout_width="wrap_content"
                 android:layout_height="34dp"
-                android:text="−"
-                android:textSize="16sp"
+                android:text="−50ms"
+                android:textSize="11sp"
                 android:textColor="#CCCCDD"
                 android:backgroundTint="#2A2A3E"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:padding="0dp"
                 android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
                 style="?attr/materialButtonOutlinedStyle" />
 
             <TextView
@@ -415,33 +517,45 @@
 
             <Button
                 android:id="@+id/btn_aa_delay_plus"
-                android:layout_width="38dp"
+                android:layout_width="wrap_content"
                 android:layout_height="34dp"
-                android:text="+"
-                android:textSize="16sp"
+                android:text="+50ms"
+                android:textSize="11sp"
                 android:textColor="#CCCCDD"
                 android:backgroundTint="#2A2A3E"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:padding="0dp"
-                android:textAllCaps="false"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_aa_delay_reset"
-                android:layout_width="wrap_content"
-                android:layout_height="34dp"
-                android:text="Reset"
-                android:textSize="10sp"
-                android:textColor="#8888AA"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="6dp"
                 android:textAllCaps="false"
                 android:minWidth="0dp"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
+                style="?attr/materialButtonOutlinedStyle" />
+        </LinearLayout>
+
+        <!-- AA Sync reset action -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="end"
+            android:layout_marginTop="4dp">
+
+            <Button
+                android:id="@+id/btn_aa_delay_reset"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="⟳ Reset"
+                android:textSize="10sp"
+                android:textColor="#D7A0A8"
+                android:backgroundTint="#4A252C"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:enabled="false"
+                android:alpha="0.35"
                 style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
     </LinearLayout>
@@ -500,7 +614,7 @@
             style="?attr/materialButtonOutlinedStyle" />
     </FrameLayout>
 
-    <!-- Delay Controls -->
+    <!-- Phone Sync Controls -->
     <LinearLayout
         android:id="@+id/layout_delay"
         android:layout_width="match_parent"
@@ -510,6 +624,7 @@
         android:paddingTop="8dp"
         android:paddingBottom="8dp">
 
+        <!-- Fine adjustment row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -518,16 +633,18 @@
 
             <Button
                 android:id="@+id/btn_delay_minus"
-                android:layout_width="40dp"
+                android:layout_width="wrap_content"
                 android:layout_height="36dp"
-                android:text="−"
-                android:textSize="18sp"
+                android:text="−50ms"
+                android:textSize="11sp"
                 android:textColor="#CCCCDD"
                 android:backgroundTint="#2A2A3E"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:padding="0dp"
                 android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
                 style="?attr/materialButtonOutlinedStyle" />
 
             <TextView
@@ -536,38 +653,23 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="12dp"
                 android:layout_marginEnd="12dp"
-                android:text="Sync: 0ms"
+                android:text="Phone Sync: 0ms"
                 android:textColor="#8888AA"
                 android:textSize="13sp"
                 android:fontFamily="sans-serif-medium"
-                android:minWidth="100dp"
+                android:minWidth="120dp"
                 android:gravity="center" />
 
             <Button
                 android:id="@+id/btn_delay_plus"
-                android:layout_width="40dp"
+                android:layout_width="wrap_content"
                 android:layout_height="36dp"
-                android:text="+"
-                android:textSize="18sp"
+                android:text="+50ms"
+                android:textSize="11sp"
                 android:textColor="#CCCCDD"
                 android:backgroundTint="#2A2A3E"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
-                android:padding="0dp"
-                android:textAllCaps="false"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_delay_reset"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:text="Reset"
-                android:textSize="11sp"
-                android:textColor="#8888AA"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="8dp"
                 android:textAllCaps="false"
                 android:minWidth="0dp"
                 android:paddingStart="12dp"
@@ -575,7 +677,136 @@
                 style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
 
-        <!-- Sync tools row -->
+        <!-- Quick offset row with Reset centered between delay and advance presets -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:paddingTop="6dp">
+
+            <Button
+                android:id="@+id/btn_quick_minus_1s"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="−1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_minus_half"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="−0.5s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_minus_tenth"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="−0.1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_delay_reset"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="⟳ Reset"
+                android:textSize="9sp"
+                android:textColor="#D7A0A8"
+                android:backgroundTint="#4A252C"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="4dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp"
+                android:enabled="false"
+                android:alpha="0.35"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_tenth"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+0.1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="4dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_half"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+0.5s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+
+            <Button
+                android:id="@+id/btn_quick_plus_1s"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="+1s"
+                android:textSize="10sp"
+                android:textColor="#AAAACC"
+                android:backgroundTint="#222233"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginStart="3dp"
+                android:textAllCaps="false"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                style="?attr/materialButtonOutlinedStyle" />
+        </LinearLayout>
+
+        <!-- Tap to Sync row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -600,7 +831,7 @@
                 style="?attr/materialButtonOutlinedStyle" />
         </LinearLayout>
 
-        <!-- Sync status (full-width below buttons for readability) -->
+        <!-- Sync status (full-width below Tap to Sync for readability) -->
         <TextView
             android:id="@+id/tv_sync_status"
             android:layout_width="match_parent"
@@ -614,82 +845,6 @@
             android:textSize="14sp"
             android:lineSpacingMultiplier="1.2"
             android:visibility="gone" />
-
-        <!-- Quick offset row -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:paddingTop="4dp">
-
-            <Button
-                android:id="@+id/btn_quick_minus_1s"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="−1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_minus_half"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="−0.5s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="6dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_plus_half"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="+0.5s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="6dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                style="?attr/materialButtonOutlinedStyle" />
-
-            <Button
-                android:id="@+id/btn_quick_plus_1s"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="+1s"
-                android:textSize="10sp"
-                android:textColor="#AAAACC"
-                android:backgroundTint="#222233"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:layout_marginStart="6dp"
-                android:textAllCaps="false"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                style="?attr/materialButtonOutlinedStyle" />
-        </LinearLayout>
     </LinearLayout>
 
 </LinearLayout>

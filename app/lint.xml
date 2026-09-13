@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!--
+      Auto Lyrics exposes the currently playing app's lyrics through a
+      MediaBrowserService; it is not a searchable music catalog and does not
+      own media selection. Advertising MEDIA_PLAY_FROM_SEARCH would claim a
+      capability the service cannot fulfill, so these exceptions are scoped
+      only to the existing companion-service declaration and callback.
+    -->
+    <issue id="MissingIntentFilterForMediaSearch">
+        <ignore path="src/main/AndroidManifest.xml" />
+    </issue>
+    <issue id="MissingOnPlayFromSearch">
+        <ignore path="src/main/java/com/autolyrics/auto/LyricsBrowserService.kt" />
+    </issue>
+</lint>

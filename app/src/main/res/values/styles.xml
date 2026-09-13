@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="ShapeAppearance.AutoLyrics.Snackbar" parent="ShapeAppearance.MaterialComponents.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">10dp</item>
+    </style>
+
+    <style name="Widget.AutoLyrics.Snackbar" parent="Widget.MaterialComponents.Snackbar">
+        <item name="android:minWidth">0dp</item>
+        <item name="android:maxWidth">320dp</item>
+        <item name="android:layout_margin">12dp</item>
+        <item name="android:layout_gravity">bottom|center_horizontal</item>
+        <item name="backgroundTint">#2A2A3E</item>
+        <item name="shapeAppearance">@style/ShapeAppearance.AutoLyrics.Snackbar</item>
+    </style>
+
+    <style name="Widget.AutoLyrics.SnackbarButton" parent="Widget.MaterialComponents.Button.TextButton.Snackbar">
+        <item name="android:textColor">#D0C1FF</item>
+    </style>
+
+    <style name="Widget.AutoLyrics.SnackbarText" parent="Widget.MaterialComponents.Snackbar.TextView">
+        <item name="android:textColor">#E8E8F4</item>
+    </style>
+</resources>

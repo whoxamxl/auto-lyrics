@@ -237,6 +237,13 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     ) {
         val sign = if (aaOffsetMs >= 0) "+" else ""
         items.add(buildTextItem("sync_offset", "AA Offset: ${sign}${aaOffsetMs}ms"))
+        items.add(
+            buildTextItem(
+                SYNC_MINUS_ID,
+                "◀◀  Delay lyrics",
+                subtitle = "−${SYNC_STEP_MS} ms"
+            )
+        )
 
         if (state.lines.isNotEmpty()) {
             val posMs = getAaPositionMs()
@@ -275,8 +282,13 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             }
         }
 
-        items.add(buildTextItem(SYNC_MINUS_ID, "⏪  − 50ms"))
-        items.add(buildTextItem(SYNC_PLUS_ID, "⏩  + 50ms"))
+        items.add(
+            buildTextItem(
+                SYNC_PLUS_ID,
+                "▶▶  Advance lyrics",
+                subtitle = "+${SYNC_STEP_MS} ms"
+            )
+        )
     }
 
     private fun buildMoreMenu(
