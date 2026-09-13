@@ -448,8 +448,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 } else {
                     line.text
                 }
+                val markedOriginal = "▶  $original"
                 val trans = state.translatedLines?.getOrNull(lineIdx)?.takeIf { it.isNotBlank() }
-                return if (trans != null) "$original\n$trans" else original
+                return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
             }
         }
 
@@ -460,8 +461,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                     .coerceIn(0, state.lines.size - 1)
             } else { 0 }
             val original = state.lines[idx].text
+            val markedOriginal = "▶  $original"
             val trans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            return if (trans != null) "$original\n$trans" else original
+            return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
         }
 
         return when (state.status) {
