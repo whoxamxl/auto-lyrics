@@ -59,7 +59,20 @@ jobs:
         run: gradle testDebugUnitTest
 
       - name: Run lint
-        run: gradle lintDebug
+        shell: bash
+        run: |
+          set +e
+          gradle lintDebug
+          status=$?
+          if (( status != 0 )); then
+            report=app/build/intermediates/lint_intermediate_text_report/debug/lint-results-debug.txt
+            if [[ -f "$report" ]]; then
+              echo "----- lint-results-debug.txt -----"
+              cat "$report"
+              echo "----- end lint-results-debug.txt -----"
+            fi
+          fi
+          exit "$status"
 
       - name: Build APK
         run: |
