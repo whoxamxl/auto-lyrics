@@ -461,12 +461,12 @@ class MainActivity : AppCompatActivity() {
                 ssb.append("    $translatedLine")
                 ssb.setSpan(
                     RelativeSizeSpan(0.8f),
-                    tlStart, ssb.length,
+                    tlStart, sb.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
                 ssb.setSpan(
                     ForegroundColorSpan(dimColor),
-                    tlStart, ssb.length,
+                    tlStart, sb.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
@@ -588,7 +588,23 @@ class MainActivity : AppCompatActivity() {
     private fun applyFontSettings() {
         tvLyrics.textSize = lyricsFontSizeSp.toFloat()
         tvLyrics.typeface = Typeface.create(lyricsFontFamily, Typeface.NORMAL)
-        tvFontSize.text = "${lyricsFontSizeSp}sp"
+
+        val sizeLabel = SpannableStringBuilder().apply {
+            append(lyricsFontSizeSp.toString())
+            val unitStart = length
+            append(" sp")
+            setSpan(
+                RelativeSizeSpan(0.77f),
+                unitStart, length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            setSpan(
+                ForegroundColorSpan(Color.parseColor("#8888AA")),
+                unitStart, length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        tvFontSize.text = sizeLabel
     }
 
     private fun updateFontButtonHighlights() {
