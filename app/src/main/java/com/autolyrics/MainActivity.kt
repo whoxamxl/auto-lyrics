@@ -35,6 +35,7 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.AlbumColors
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchAaKaraoke: SwitchCompat
     private lateinit var switchTranslation: SwitchCompat
     private lateinit var tvAaDelay: TextView
+    private lateinit var btnAaDelayReset: Button
     private lateinit var btnJumpToCurrent: Button
     private lateinit var prefs: SharedPreferences
     private var lastScrolledIndex = -1
@@ -184,6 +186,7 @@ class MainActivity : AppCompatActivity() {
 
         switchAaKaraoke = findViewById(R.id.switch_aa_karaoke)
         tvAaDelay = findViewById(R.id.tv_aa_delay)
+        btnAaDelayReset = findViewById(R.id.btn_aa_delay_reset)
 
         switchAaKaraoke.isChecked = prefs.getBoolean("aa_karaoke_enabled", true)
         aaOffsetMs = prefs.getLong(AA_OFFSET_PREF_KEY, 0L)
@@ -210,10 +213,21 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putLong(AA_OFFSET_PREF_KEY, aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
-        findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
+        btnAaDelayReset.setOnClickListener {
+            val previousOffset = aaOffsetMs
+            if (previousOffset == 0L) return@setOnClickListener
+
             aaOffsetMs = 0L
             prefs.edit().putLong(AA_OFFSET_PREF_KEY, 0L).apply()
             updateAaDelayDisplay()
+
+            Snackbar.make(rootLayout, "AA Sync reset", Snackbar.LENGTH_LONG)
+                .setAction("Undo") {
+                    aaOffsetMs = previousOffset
+                    prefs.edit().putLong(AA_OFFSET_PREF_KEY, previousOffset).apply()
+                    updateAaDelayDisplay()
+                }
+                .show()
         }
 
         btnTapSync = findViewById(R.id.btn_tap_sync)
@@ -569,6 +583,10 @@ class MainActivity : AppCompatActivity() {
     private fun updateAaDelayDisplay() {
         val sign = if (aaOffsetMs > 0) "+" else ""
         tvAaDelay.text = "${sign}${aaOffsetMs}ms"
+
+        val canReset = aaOffsetMs != 0L
+        btnAaDelayReset.isEnabled = canReset
+        btnAaDelayReset.alpha = if (canReset) 1f else 0.35f
     }
 
     private fun selectFont(family: String) {
