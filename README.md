@@ -9,6 +9,7 @@ Auto Lyrics is an Android app that follows the active media session and displays
 - **Adaptive lyric window** — the main Lyrics tab shows 5 rows without translations and 3 rows when translated subtitles are present.
 - **Fixed 3-row Sync preview** — current line plus surrounding context while adjusting the Android Auto offset.
 - **Now-playing lyric line** — the Android Auto now-playing card also carries the current lyric line.
+- **PetitLyrics word karaoke** — Type 3 / WSY responses retain per-word start/end timing and provider-authored spacing for phone, performance, and Android Auto karaoke views.
 - **Multi-provider resolution** — LRCLIB and PetitLyrics can be queried in parallel and compared using metadata match, lyric quality, and source confidence.
 - **Synced and plain fallback** — synchronized lyrics are preferred; LRCLIB plain text remains a last-resort fallback.
 - **Robust metadata matching** — handles recording/version qualifiers, romanized-vs-native-script artist names, and multi-contributor metadata such as `Alan Menken, Howard Ashman, Samuel E. Wright, Disney`.
@@ -130,6 +131,8 @@ The primary browse tab. It shows the track header plus a moving lyric window:
 
 The non-current rows reserve a visual gutter so their lyric text aligns with the current row. When translations are present, the main window is reduced to 3 rows to avoid overcrowding.
 
+When the selected result contains word timing, the current line can show a compact text karaoke marker while preserving the provider's original spacing.
+
 ### Sync
 
 The secondary tab for Android Auto timing correction. It keeps a fixed 3-row lyric preview and provides `−50 ms` / `+50 ms` controls. This offset is Android-Auto-specific and is separate from the phone/global lyric offset.
@@ -145,7 +148,7 @@ Shows detailed information such as title, artist, album, provider, synchronizati
 3. LRCLIB and configured PetitLyrics requests are launched in parallel with provider time budgets.
 4. Provider-specific search logic gathers plausible candidates. Searches may progressively relax their metadata constraints.
 5. `LyricsProviderResolver` validates metadata and compares candidate quality/source confidence.
-6. Synchronized results are preferred. LRCLIB plain lyrics are used only when no acceptable synchronized result exists.
+6. Synchronized results are preferred. PetitLyrics Type 3 retains word start/end timing; LRCLIB plain lyrics are used only when no acceptable synchronized result exists.
 7. The selected result is cached. Incomplete provider comparisons are refreshed sooner than fully corroborated selections.
 
 This design is intentionally not “first provider to respond wins”; normal request latency is not part of the score. A provider only loses due to speed when it exceeds its timeout budget and therefore fails to produce a candidate for that comparison.
