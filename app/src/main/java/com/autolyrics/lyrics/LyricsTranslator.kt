@@ -3,12 +3,21 @@ package com.autolyrics.lyrics
 import android.util.Log
 import com.autolyrics.model.LyricLine
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import kotlin.coroutines.resumeWithException
 
 data class TranslationResult(
     val translatedLines: List<String>,
@@ -17,10 +26,39 @@ data class TranslationResult(
 
 object LyricsTranslator {
 
+    enum class Phase {
+        IDLE,
+        DETECTING_LANGUAGE,
+        CHECKING_MODEL,
+        DOWNLOADING_MODEL,
+        TRANSLATING,
+        READY,
+        ALREADY_ENGLISH,
+        UNSUPPORTED_LANGUAGE,
+        DOWNLOAD_FAILED,
+        DOWNLOAD_TIMED_OUT,
+        TRANSLATION_FAILED
+    }
+
+    data class UiState(
+        val phase: Phase = Phase.IDLE,
+        val sourceLanguage: String? = null,
+        val error: String? = null
+    )
+
     private const val TAG = "LyricsTranslator"
+    private const val MODEL_DOWNLOAD_TIMEOUT_MS = 90_000L
+
+    private val _uiState = MutableStateFlow(UiState())
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    fun resetUiState() {
+        _uiState.value = UiState()
+    }
 
     suspend fun translateLines(lines: List<LyricLine>): TranslationResult? {
         Log.d(TAG, "translateLines start: lines=${lines.size}")
+        updateState(Phase.DETECTING_LANGUAGE)
 
         val sampleText = lines
             .map { it.text }
@@ -29,31 +67,88 @@ object LyricsTranslator {
             .joinToString("\n")
 
         if (sampleText.isBlank()) {
-            Log.d(TAG, "skip: no translatable sample text")
+            val reason = "No translatable lyric text"
+            Log.w(TAG, "skip: $reason")
+            updateState(Phase.TRANSLATION_FAILED, error = reason)
             return null
         }
 
         Log.d(TAG, "detecting source language")
         val langCode = detectLanguage(sampleText)
         if (langCode == null) {
-            Log.w(TAG, "skip: language detection failed")
+            val reason = "Language detection failed"
+            Log.w(TAG, "skip: $reason")
+            updateState(Phase.TRANSLATION_FAILED, error = reason)
             return null
         }
         Log.d(TAG, "detected source language=$langCode")
 
         if (langCode == "en") {
             Log.d(TAG, "skip: source is already English")
+            updateState(Phase.ALREADY_ENGLISH, sourceLanguage = langCode)
             return null
         }
         if (langCode == "und") {
-            Log.w(TAG, "skip: source language is undetermined")
+            val reason = "Could not determine lyric language"
+            Log.w(TAG, "skip: $reason")
+            updateState(Phase.UNSUPPORTED_LANGUAGE, sourceLanguage = langCode, error = reason)
             return null
         }
 
         val mlLang = TranslateLanguage.fromLanguageTag(langCode)
         if (mlLang == null) {
-            Log.w(TAG, "skip: unsupported ML Kit source language=$langCode")
+            val reason = "ML Kit does not support source language '$langCode'"
+            Log.w(TAG, "skip: $reason")
+            updateState(Phase.UNSUPPORTED_LANGUAGE, sourceLanguage = langCode, error = reason)
             return null
+        }
+
+        val remoteModelManager = RemoteModelManager.getInstance()
+        val remoteModel = TranslateRemoteModel.Builder(mlLang).build()
+
+        updateState(Phase.CHECKING_MODEL, sourceLanguage = langCode)
+        val modelDownloaded = try {
+            isModelDownloaded(remoteModelManager, remoteModel)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val reason = e.localizedMessage ?: e.javaClass.simpleName
+            Log.e(TAG, "translation model check failed", e)
+            updateState(Phase.DOWNLOAD_FAILED, sourceLanguage = langCode, error = reason)
+            return null
+        }
+
+        if (modelDownloaded) {
+            Log.d(TAG, "translation model already downloaded: $mlLang")
+        } else {
+            Log.d(TAG, "translation model missing; starting explicit download: $mlLang")
+            updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = langCode)
+            try {
+                withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
+                    downloadModel(
+                        remoteModelManager,
+                        remoteModel,
+                        DownloadConditions.Builder().build()
+                    )
+                }
+                Log.d(TAG, "translation model download complete: $mlLang")
+            } catch (e: TimeoutCancellationException) {
+                val reason = "Model download exceeded ${MODEL_DOWNLOAD_TIMEOUT_MS / 1000}s"
+                Log.e(TAG, reason, e)
+                updateState(
+                    Phase.DOWNLOAD_TIMED_OUT,
+                    sourceLanguage = langCode,
+                    error = reason
+                )
+                return null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason = e.localizedMessage ?: e.javaClass.simpleName
+                Log.e(TAG, "translation model download failed", e)
+                updateState(Phase.DOWNLOAD_FAILED, sourceLanguage = langCode, error = reason)
+                return null
+            }
         }
 
         val options = TranslatorOptions.Builder()
@@ -63,58 +158,124 @@ object LyricsTranslator {
         val translator = Translation.getClient(options)
 
         try {
-            Log.d(TAG, "ensuring translation model is downloaded: $mlLang -> en")
-            val modelReady = suspendCoroutine { cont ->
-                translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
-                    .addOnSuccessListener {
-                        Log.d(TAG, "translation model ready")
-                        cont.resume(true)
-                    }
-                    .addOnFailureListener { error ->
-                        Log.e(TAG, "translation model download failed", error)
-                        cont.resume(false)
-                    }
-            }
-            if (!modelReady) return null
-
+            updateState(Phase.TRANSLATING, sourceLanguage = langCode)
             var failures = 0
+            var attempted = 0
             val translated = lines.map { line ->
                 val text = line.text.trim()
                 if (text.isBlank() || text == "♪") {
                     ""
                 } else {
-                    suspendCoroutine { cont ->
-                        translator.translate(text)
-                            .addOnSuccessListener { cont.resume(it) }
-                            .addOnFailureListener { error ->
-                                failures++
-                                Log.w(TAG, "line translation failed; keeping original", error)
-                                cont.resume(text)
-                            }
+                    attempted++
+                    try {
+                        translateText(translator, text)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failures++
+                        Log.w(TAG, "line translation failed; keeping original", e)
+                        text
                     }
                 }
             }
 
+            if (attempted > 0 && failures == attempted) {
+                val reason = "All lyric lines failed to translate"
+                Log.e(TAG, reason)
+                updateState(Phase.TRANSLATION_FAILED, sourceLanguage = langCode, error = reason)
+                return null
+            }
+
             Log.d(TAG, "translation complete: lines=${translated.size}, failures=$failures")
+            updateState(Phase.READY, sourceLanguage = langCode)
             return TranslationResult(translated, langCode)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val reason = e.localizedMessage ?: e.javaClass.simpleName
+            Log.e(TAG, "translation failed", e)
+            updateState(Phase.TRANSLATION_FAILED, sourceLanguage = langCode, error = reason)
+            return null
         } finally {
             translator.close()
         }
     }
 
+    private fun updateState(
+        phase: Phase,
+        sourceLanguage: String? = null,
+        error: String? = null
+    ) {
+        _uiState.value = UiState(phase, sourceLanguage, error)
+    }
+
     private suspend fun detectLanguage(text: String): String? {
         val identifier = LanguageIdentification.getClient()
         return try {
-            suspendCoroutine { cont ->
+            suspendCancellableCoroutine { cont ->
                 identifier.identifyLanguage(text)
-                    .addOnSuccessListener { cont.resume(it) }
+                    .addOnSuccessListener { language ->
+                        if (cont.isActive) cont.resume(language)
+                    }
                     .addOnFailureListener { error ->
                         Log.e(TAG, "language identification failed", error)
-                        cont.resume(null)
+                        if (cont.isActive) cont.resume(null)
+                    }
+                    .addOnCanceledListener {
+                        cont.cancel()
                     }
             }
         } finally {
             identifier.close()
         }
+    }
+
+    private suspend fun isModelDownloaded(
+        manager: RemoteModelManager,
+        model: TranslateRemoteModel
+    ): Boolean = suspendCancellableCoroutine { cont ->
+        manager.isModelDownloaded(model)
+            .addOnSuccessListener { downloaded ->
+                if (cont.isActive) cont.resume(downloaded)
+            }
+            .addOnFailureListener { error ->
+                if (cont.isActive) cont.resumeWithException(error)
+            }
+            .addOnCanceledListener {
+                cont.cancel()
+            }
+    }
+
+    private suspend fun downloadModel(
+        manager: RemoteModelManager,
+        model: TranslateRemoteModel,
+        conditions: DownloadConditions
+    ): Unit = suspendCancellableCoroutine { cont ->
+        manager.download(model, conditions)
+            .addOnSuccessListener {
+                if (cont.isActive) cont.resume(Unit)
+            }
+            .addOnFailureListener { error ->
+                if (cont.isActive) cont.resumeWithException(error)
+            }
+            .addOnCanceledListener {
+                cont.cancel()
+            }
+    }
+
+    private suspend fun translateText(
+        translator: com.google.mlkit.nl.translate.Translator,
+        text: String
+    ): String = suspendCancellableCoroutine { cont ->
+        translator.translate(text)
+            .addOnSuccessListener { translated ->
+                if (cont.isActive) cont.resume(translated)
+            }
+            .addOnFailureListener { error ->
+                if (cont.isActive) cont.resumeWithException(error)
+            }
+            .addOnCanceledListener {
+                cont.cancel()
+            }
     }
 }
