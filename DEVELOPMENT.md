@@ -44,7 +44,9 @@ AutoLyricsApp
 
 When PetitLyrics is configured, LRCLIB and PetitLyrics are started in parallel. Each provider gets a **5 second total budget** at the `MediaTracker` layer; PetitLyrics HTTP calls also use a 4 second per-call timeout. Healthy requests are normally much faster than this, so a stalled provider cannot hold a track change for the old 10–15 second socket timeout window.
 
-Provider-specific search logic produces a plausible candidate, then `LyricsProviderResolver` applies the common final comparison:
+Provider-specific code performs search/fallback and produces plausible candidates. PetitLyrics candidate ranking now delegates metadata validation to the same `LyricsProviderResolver.metadataScore()` logic used for the final cross-provider comparison, avoiding a separate title/artist/album scoring formula. LRCLIB retains its existing search-side matcher because it uses LRCLIB-specific duration and endpoint behavior; the final LRCLIB-vs-PetitLyrics decision is still made only by the common resolver.
+
+The common final comparison is:
 
 ```text
 final score = metadata match × 0.82
@@ -120,7 +122,7 @@ PETITLYRICS_CLIENT_APP_ID
 
 `.github/workflows/build.yml` injects these secrets only for `v*` tag builds. Ordinary pull-request and `main` CI artifacts compile with empty PetitLyrics values, so the provider is disabled there and the identifiers are not embedded in routine artifacts.
 
-For a `v*` tag, the workflow now validates that **all four** PetitLyrics release secrets are non-empty before testing/building. This prevents accidentally publishing a release APK with PetitLyrics silently disabled.
+For a `v*` tag, the workflow validates that **all four** PetitLyrics release secrets are non-empty before testing/building. This prevents accidentally publishing a release APK with PetitLyrics silently disabled.
 
 ### Release procedure
 
