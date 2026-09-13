@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.autolyrics.BuildConfig
+import com.autolyrics.lyrics.KaraokeTiming
 import com.autolyrics.lyrics.LrcLibClient
 import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
@@ -153,18 +154,10 @@ class MediaTracker private constructor(context: Context) {
             }
         }
 
-        var newWordIndex = -1
-        if (newLineIndex >= 0) {
-            val words = lines[newLineIndex].words
-            if (words.isNotEmpty()) {
-                for (i in words.indices) {
-                    if (words[i].timeMs <= posMs) {
-                        newWordIndex = i
-                    } else {
-                        break
-                    }
-                }
-            }
+        val newWordIndex = if (newLineIndex >= 0) {
+            KaraokeTiming.activeWordIndex(lines[newLineIndex].words, posMs)
+        } else {
+            -1
         }
 
         if (newLineIndex != currentState.currentIndex || newWordIndex != currentState.currentWordIndex) {
