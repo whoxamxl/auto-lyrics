@@ -1,7 +1,9 @@
 package com.autolyrics.lyrics
 
+import android.os.SystemClock
 import android.util.Log
 import com.autolyrics.model.LyricLine
+import com.google.android.gms.tasks.Task
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
@@ -10,12 +12,13 @@ import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -47,7 +50,15 @@ object LyricsTranslator {
     )
 
     private const val TAG = "LyricsTranslator"
-    private const val MODEL_DOWNLOAD_TIMEOUT_MS = 90_000L
+    private const val MODEL_DOWNLOAD_TIMEOUT_MS = 5L * 60 * 1000
+    private const val MODEL_POLL_INTERVAL_MS = 2_000L
+    private const val MODEL_CHECK_TIMEOUT_MS = 10_000L
+    private const val MODEL_POLL_LOG_INTERVAL = 5
+
+    // ML Kit model download Tasks are not cancellable by coroutines. Keep the active
+    // Task per language so Retry does not blindly start duplicate downloads while an
+    // earlier request may still be running in Google Play services.
+    private val activeModelDownloads = ConcurrentHashMap<String, Task<Void>>()
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -121,26 +132,26 @@ object LyricsTranslator {
         if (modelDownloaded) {
             Log.d(TAG, "translation model already downloaded: $mlLang")
         } else {
-            Log.d(TAG, "translation model missing; starting explicit download: $mlLang")
+            Log.d(TAG, "translation model missing; ensuring explicit download: $mlLang")
             updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = langCode)
             try {
-                withTimeout(MODEL_DOWNLOAD_TIMEOUT_MS) {
-                    downloadModel(
-                        remoteModelManager,
-                        remoteModel,
-                        DownloadConditions.Builder().build()
-                    )
-                }
-                Log.d(TAG, "translation model download complete: $mlLang")
-            } catch (e: TimeoutCancellationException) {
-                val reason = "Model download exceeded ${MODEL_DOWNLOAD_TIMEOUT_MS / 1000}s"
-                Log.e(TAG, reason, e)
-                updateState(
-                    Phase.DOWNLOAD_TIMED_OUT,
-                    sourceLanguage = langCode,
-                    error = reason
+                val becameAvailable = waitForModelDownload(
+                    manager = remoteModelManager,
+                    model = remoteModel,
+                    languageKey = mlLang,
+                    conditions = DownloadConditions.Builder().build()
                 )
-                return null
+                if (!becameAvailable) {
+                    val reason = "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min"
+                    Log.e(TAG, reason)
+                    updateState(
+                        Phase.DOWNLOAD_TIMED_OUT,
+                        sourceLanguage = langCode,
+                        error = reason
+                    )
+                    return null
+                }
+                Log.d(TAG, "translation model confirmed available: $mlLang")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -246,21 +257,86 @@ object LyricsTranslator {
             }
     }
 
-    private suspend fun downloadModel(
+    private fun getOrStartDownloadTask(
         manager: RemoteModelManager,
         model: TranslateRemoteModel,
+        languageKey: String,
         conditions: DownloadConditions
-    ): Unit = suspendCancellableCoroutine { cont ->
-        manager.download(model, conditions)
-            .addOnSuccessListener {
-                if (cont.isActive) cont.resume(Unit)
+    ): Task<Void> {
+        synchronized(activeModelDownloads) {
+            activeModelDownloads[languageKey]?.let { existing ->
+                if (!existing.isComplete) {
+                    Log.d(TAG, "reusing active model download task: $languageKey")
+                    return existing
+                }
+                activeModelDownloads.remove(languageKey, existing)
             }
-            .addOnFailureListener { error ->
-                if (cont.isActive) cont.resumeWithException(error)
+
+            Log.d(TAG, "starting model download task: $languageKey")
+            val task = manager.download(model, conditions)
+            activeModelDownloads[languageKey] = task
+            task.addOnSuccessListener {
+                Log.d(TAG, "model download task reported success: $languageKey")
+                activeModelDownloads.remove(languageKey, task)
             }
-            .addOnCanceledListener {
-                cont.cancel()
+            task.addOnFailureListener { error ->
+                Log.e(TAG, "model download task reported failure: $languageKey", error)
+                activeModelDownloads.remove(languageKey, task)
             }
+            task.addOnCanceledListener {
+                Log.w(TAG, "model download task reported cancellation: $languageKey")
+                activeModelDownloads.remove(languageKey, task)
+            }
+            return task
+        }
+    }
+
+    private suspend fun waitForModelDownload(
+        manager: RemoteModelManager,
+        model: TranslateRemoteModel,
+        languageKey: String,
+        conditions: DownloadConditions
+    ): Boolean {
+        val task = getOrStartDownloadTask(manager, model, languageKey, conditions)
+        val startedAt = SystemClock.elapsedRealtime()
+        var pollCount = 0
+
+        while (SystemClock.elapsedRealtime() - startedAt < MODEL_DOWNLOAD_TIMEOUT_MS) {
+            val downloaded = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
+                isModelDownloaded(manager, model)
+            }
+            if (downloaded == true) {
+                Log.d(TAG, "model became available while polling: $languageKey")
+                activeModelDownloads.remove(languageKey, task)
+                return true
+            }
+
+            if (task.isComplete && !task.isSuccessful) {
+                throw task.exception ?: IllegalStateException("Model download task failed")
+            }
+
+            pollCount++
+            if (pollCount % MODEL_POLL_LOG_INTERVAL == 0) {
+                val elapsedSec = (SystemClock.elapsedRealtime() - startedAt) / 1000
+                Log.d(
+                    TAG,
+                    "model download still pending: $languageKey elapsed=${elapsedSec}s " +
+                        "taskComplete=${task.isComplete}"
+                )
+            }
+            delay(MODEL_POLL_INTERVAL_MS)
+        }
+
+        // One final authoritative check before showing Retry. The underlying ML Kit
+        // Task may finish independently of the coroutine timeout/polling cadence.
+        val finalDownloaded = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
+            isModelDownloaded(manager, model)
+        } == true
+        if (finalDownloaded) {
+            Log.d(TAG, "model became available on final check: $languageKey")
+            activeModelDownloads.remove(languageKey, task)
+        }
+        return finalDownloaded
     }
 
     private suspend fun translateText(
