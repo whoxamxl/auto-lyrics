@@ -3,6 +3,7 @@ package com.autolyrics.lyrics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
 
@@ -146,6 +147,51 @@ class PetitLyricsClientTest {
         assertNotNull(selected)
         assertEquals("70129", selected?.lyricsId)
         assertEquals(2, selected?.lyricsType)
+    }
+
+    @Test
+    fun artistConstrainedQueryAllowsCrossScriptArtistWithDifferentAlbum() {
+        val candidate = PetitLyricsClient.PetitLyricsCandidate(
+            lyricsId = "99",
+            title = "君を忘れない",
+            artist = "松山千春",
+            album = "別アルバム",
+            lyricsType = 3,
+            lyricsData = "AA=="
+        )
+
+        val selected = PetitLyricsClient.selectBestCandidate(
+            candidates = listOf(candidate),
+            requestedTitle = "君を忘れない",
+            requestedArtist = "Chiharu Matsuyama",
+            requestedAlbum = "TOUR",
+            artistQueryCorroborated = true
+        )
+
+        assertNotNull(selected)
+        assertTrue(selected?.artistQueryCorroborated == true)
+    }
+
+    @Test
+    fun titleOnlyQueryStillRejectsCrossScriptArtistWithoutOtherEvidence() {
+        val candidate = PetitLyricsClient.PetitLyricsCandidate(
+            lyricsId = "100",
+            title = "君を忘れない",
+            artist = "別の歌手",
+            album = "別アルバム",
+            lyricsType = 3,
+            lyricsData = "AA=="
+        )
+
+        val selected = PetitLyricsClient.selectBestCandidate(
+            candidates = listOf(candidate),
+            requestedTitle = "君を忘れない",
+            requestedArtist = "Chiharu Matsuyama",
+            requestedAlbum = "TOUR",
+            artistQueryCorroborated = false
+        )
+
+        assertNull(selected)
     }
 
     @Test
