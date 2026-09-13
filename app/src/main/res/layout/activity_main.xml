@@ -129,7 +129,7 @@
             android:id="@+id/btn_performance_mode"
             android:layout_width="wrap_content"
             android:layout_height="34dp"
-            android:text="⚡ Performance"
+            android:text="⛶ Fullscreen Lyrics"
             android:textSize="11sp"
             android:textColor="#CCCCDD"
             android:backgroundTint="#2A2A3E"
