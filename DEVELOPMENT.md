@@ -1,92 +1,182 @@
 # Auto Lyrics — Development Reference
 
+This document describes the current implementation rather than the original LRCLIB-only design. Keep user-facing setup in `README.md`; keep release mechanics in `RELEASE.md`.
+
 ## Terminology
 
 | Term | Meaning |
 |---|---|
-| **Lyrics Browse View** (AA) | Android Auto browse-tree view backed by `onLoadChildren()`. Shows a window around the current lyric line. |
-| **Now-playing card** (AA) | Standard Android Auto media now-playing card rendered from `MediaMetadataCompat`. |
-| **Synced lyrics** | Line-level timestamps. `LyricsStatus.FOUND`. |
-| **Plain lyrics** / **Unsynced** | Lyrics without timestamps. `LyricsStatus.PLAIN_ONLY`. |
-| **LRCLIB** | Lyrics provider with synced and plain results plus duration metadata. |
-| **PetitLyrics** | Optional Japanese-oriented synced-lyrics provider enabled by build-time client configuration. |
-| **Provider Resolver** | Cross-provider scorer that compares metadata match, lyric payload quality, and source confidence. |
-| **AA offset** | Android Auto-specific lyrics delay stored as `aa_offset_ms`. |
-| **Phone sync** | Global lyrics offset managed by `MediaTracker.offsetMs`. |
+| **Lyrics tab** (AA) | Primary Android Auto browse section. Shows track metadata plus a moving lyric window. |
+| **Sync tab** (AA) | Android Auto timing-adjustment section with a fixed three-row lyric preview and ±50 ms controls. |
+| **More tab** (AA) | Detailed track/lyrics information: provider, sync state, language, duration, offset, etc. |
+| **Now-playing card** (AA) | Standard Android Auto media now-playing UI rendered from `MediaMetadataCompat`. Current lyrics are placed in the display subtitle. |
+| **Synced lyrics** | Timestamped lyrics represented by `LyricsStatus.FOUND`. |
+| **Plain lyrics** | Unsynchronized text represented by `LyricsStatus.PLAIN_ONLY`. |
+| **LRCLIB** | Provider supporting synchronized and plain results with documented duration metadata. |
+| **PetitLyrics** | Optional Japanese-oriented provider enabled by build-time client configuration. |
+| **Provider Resolver** | Common scorer used to validate and compare normalized provider candidates. |
+| **AA offset** | Android-Auto-specific delay stored as `aa_offset_ms`. |
+| **Phone/global offset** | Main lyric offset managed by `MediaTracker.offsetMs` / `lyrics_offset_ms`. |
 
 ## Architecture
 
 ```text
 AutoLyricsApp
-  └─ MediaTracker
-       ├─ MediaListenerService
+  └─ MediaTracker (singleton / StateFlow)
+       ├─ active MediaController state
        ├─ LrcLibClient ─────────────┐
-       ├─ PetitLyricsClient ────────┤ parallel fetch
+       ├─ PetitLyricsClient ────────┤ parallel when configured
        ├─ LyricsProviderResolver ◀──┘
-       ├─ LrcParser
-       ├─ MetadataCleaner
        ├─ LyricsCache
+       ├─ MetadataCleaner
+       ├─ LrcParser
+       ├─ LyricsTranslator
        └─ AlbumColorExtractor
 
-  Phone UI
+Phone UI
   ├─ MainActivity
   └─ PerformanceActivity
 
-  Android Auto
+Android Auto
   ├─ LyricsBrowserService
-  │   ├─ Browse tree
-  │   ├─ MediaSession
-  │   └─ Transport controls proxy
+  │   ├─ MediaBrowser browse tree
+  │   │   ├─ Lyrics
+  │   │   ├─ Sync
+  │   │   └─ More
+  │   ├─ MediaSession / now-playing metadata
+  │   └─ transport-control proxy
   └─ BootReceiver
 ```
 
-## Lyrics provider resolution
+`MediaListenerService` is a `NotificationListenerService`; its access allows the app to inspect active media sessions through `MediaSessionManager`.
 
-When PetitLyrics is configured, LRCLIB and PetitLyrics are started in parallel. Each provider gets a **5 second total budget** at the `MediaTracker` layer; PetitLyrics HTTP calls also use a 4 second per-call timeout. Healthy requests are normally much faster than this, so a stalled provider cannot hold a track change for the old 10–15 second socket timeout window.
+## Track detection and position
 
-Provider-specific code performs search/fallback and produces plausible candidates. PetitLyrics candidate ranking delegates metadata validation to the same `LyricsProviderResolver.metadataScore()` logic used for the final cross-provider comparison, avoiding a second title/artist/album scoring formula. LRCLIB retains its search-side matcher because it uses LRCLIB-specific duration and endpoint behavior; the final LRCLIB-vs-PetitLyrics decision is still made only by the common resolver.
+`MediaTracker` extracts title, artist, album, duration, and artwork from the active media controller. Metadata is normalized by `MetadataCleaner` before a `TrackInfo` is created.
 
-The common final comparison is:
+Track changes are debounced by 600 ms before a new lookup starts. While playback is active, position is reconstructed from the media session's reported position, last update time, and playback speed. Synced lyric indices are checked every 150 ms.
 
-```text
-final score = metadata match × 0.82
-            + lyric quality  × 0.10
-            + source confidence × 0.08
+The phone/global offset is included by `MediaTracker.getCurrentPositionMs()`. Android Auto applies its own additional `aa_offset_ms` inside `LyricsBrowserService`.
+
+## Provider execution
+
+When PetitLyrics is configured, LRCLIB and PetitLyrics are started concurrently. Each provider gets a hard **5 second total budget** at the `MediaTracker` layer.
+
+PetitLyrics also uses a shorter per-call HTTP timeout. Healthy provider requests are normally much faster than the outer budget; the budget exists to prevent a stalled provider from holding the entire track transition open.
+
+Provider speed is **not part of the score**. If both providers return within budget, a 200 ms response receives no scoring advantage over a 2 s response. Speed only changes the comparison when a provider times out or otherwise fails to produce a candidate.
+
+Debug logging:
+
+```powershell
+adb logcat -s "ProviderResolver:D" "PetitLyrics:D" "*:S"
 ```
 
-Metadata matching uses title, artist, duration when reliable, album, and recording-version qualifiers. Cross-script artist names such as `Junko Yagami` vs `八神純子` are treated as non-comparable only when an exact title is corroborated by another signal such as a matching album or strong duration. This prevents title-only cover/same-title matches from receiving a perfect metadata score.
+Typical resolver diagnostics include elapsed time, timeout state, candidate presence, metadata score, quality score, source confidence, and selected provider.
 
-The lyric-quality score detects suspicious Japanese/Latin-only line alternation and near-duplicate timestamps, which helps reject LRCLIB entries containing interleaved romanized transliterations. For Japanese tracks, high-quality PetitLyrics Type 3/Type 2 data has a modest source-confidence advantage; non-Japanese ties favor LRCLIB.
+## Provider resolution
 
-Synchronized candidates always beat plain lyrics. LRCLIB plain text remains the final fallback if neither provider yields acceptable synchronized lyrics.
+Provider-specific clients perform search/fallback and return normalized `LyricsProviderCandidate` objects. The final LRCLIB-vs-PetitLyrics decision is made by `LyricsProviderResolver`.
 
-Android Auto displays the selected provider in the track header, for example:
+The final score is:
 
 ```text
-⟳ Synced · LRCLIB
-⟳ Synced · PetitLyrics
+final score = metadata match     × 0.82
+            + lyric quality      × 0.10
+            + source confidence  × 0.08
 ```
 
-### Cache policy
+A synchronized candidate always outranks a plain candidate. LRCLIB plain lyrics remain the last-resort fallback when no acceptable synchronized candidate exists.
 
-Cache identity includes normalized title, artist, album, and rounded duration. A fully corroborated provider comparison is cached for the normal seven-day interval. If PetitLyrics is enabled but only one provider returns a candidate (including timeout/transient-failure cases that cannot be distinguished from an empty result at the legacy client boundary), the selected result is treated as **provisional** and revalidated after 15 minutes rather than being frozen for seven days.
+### Metadata validation
 
-This policy deliberately prefers a little extra network traffic over pinning a fallback result for a week after one provider had a temporary outage.
+The resolver validates recording/version qualifiers before scoring. Metadata weighting is approximately:
 
-## PetitLyrics Provider
+```text
+title     55%
+artist    30%
+duration  12%  (when reliable)
+album      3%
+```
 
-The PetitLyrics integration is based on the request/response structure demonstrated by the reference project `whoxamxl/petitlyric_sync_lyric_download`.
+Weights are renormalized when a field is unavailable or intentionally treated as non-comparable.
+
+PetitLyrics duration is not currently trusted for common resolver scoring because observed response fields are not sufficiently reliable across formats/clients. LRCLIB duration is used.
+
+### Cross-script artist names
+
+Romanized player metadata and native Japanese provider metadata are not directly comparable. Examples include Latin-script artist metadata against Japanese-script provider metadata.
+
+For a near-exact title, the resolver may neutralize a cross-script artist mismatch when there is independent evidence:
+
+- PetitLyrics returned the candidate from a request that explicitly included `key_artist` (`artistQueryCorroborated=true`), or
+- album similarity is strong enough, or
+- reliable duration similarity is strong enough.
+
+This distinction is important: a PetitLyrics **title-only** fallback does not get artist-query corroboration, so same-title/different-artist candidates still need another signal.
+
+### Multi-contributor artist metadata
+
+Some players expose a contributor list instead of one performer, for example:
+
+```text
+Alan Menken, Howard Ashman, Samuel E. Wright, Disney
+```
+
+For near-exact title matches, artist similarity can inspect comma/semicolon-delimited components and accept a strong component match such as `Samuel E. Wright`.
+
+The full metadata string is preserved; the app does not globally truncate artist names at the first comma. This avoids breaking legitimate names that contain punctuation.
+
+### Lyric payload quality
+
+The resolver scores the payload separately from metadata. Current quality checks include:
+
+- suspicious Japanese / Latin-only alternation,
+- near-duplicate timestamps around transliteration lines,
+- lyrics extending far beyond the track duration,
+- unusually short timing coverage for a long synchronized track,
+- very late first timestamps.
+
+The Japanese/Latin alternation penalty is primarily intended to catch LRCLIB entries containing interleaved romanized transliterations as if they were separate timed lyric rows.
+
+### Source confidence
+
+Source confidence is deliberately a small part of the final score (8%). Current policy gives high-quality PetitLyrics Type 3/Type 2 data an advantage on Japanese tracks and gives LRCLIB synchronized data the advantage on non-Japanese tracks. Metadata and payload quality remain the dominant factors.
+
+## LRCLIB search
+
+LRCLIB uses provider-specific search logic because it can use duration and has its own endpoint behavior. Search starts with constrained metadata and can relax when necessary, including title-only discovery when stronger searches do not yield usable synchronized lyrics.
+
+Relaxed discovery does not mean relaxed acceptance: returned records are re-ranked locally using title, contributor-aware artist matching, album, duration, and version qualifiers.
+
+If no acceptable synchronized LRCLIB entry exists but an acceptable plain result does, it can be returned as `LyricsStatus.PLAIN_ONLY`.
+
+## PetitLyrics provider
+
+The PetitLyrics integration follows the request/response structure demonstrated by the reference project `whoxamxl/petitlyric_sync_lyric_download` while using this app's own configured identifiers.
 
 Supported formats:
 
-- **lyricsType=3 / WSY** — word-sync XML. Auto Lyrics currently imports the first word start time of each line as the line timestamp; word-level karaoke timing is not surfaced.
-- **lyricsType=2 / LSY** — binary line-sync timing. Auto Lyrics decodes the timing payload and retrieves a **lyricsType=1** companion text payload, preferably by the same `lyricsId`, then combines them into line-synced lyrics.
+- **lyricsType=3 / WSY** — word-sync XML. Auto Lyrics currently uses the first word start time of each line as the line timestamp. It does not import the full per-word karaoke timing payload into `LyricWord`.
+- **lyricsType=2 / LSY** — binary line-sync timing. Auto Lyrics decodes the timing payload and combines it with a **lyricsType=1** plain-text companion, preferably resolved by the same `lyricsId`.
 
-PetitLyrics search progressively relaxes from `title + artist + album` to `title + artist`, then `title-only`, while local metadata validation prevents weak results from winning just because they were returned first. Type-1 companion selection is metadata-ranked if an exact `lyricsId` lookup is unavailable, so the first returned Type-1 record is no longer accepted blindly.
+PetitLyrics search progressively relaxes:
 
-This integration uses an internal/unofficial PetitLyrics endpoint and is not affiliated with PetitLyrics. Availability and behavior may change independently of Auto Lyrics.
+```text
+title + artist + album
+        ↓
+title + artist
+        ↓
+title only
+```
 
-### Local configuration
+The search stage that produced a candidate is preserved through `artistQueryCorroborated`, allowing the resolver to distinguish an artist-constrained cross-script hit from a title-only fallback.
+
+Type-1 companion fallback is metadata-ranked when an exact `lyricsId` lookup is unavailable; it is not allowed to blindly use the first returned record.
+
+PetitLyrics uses an internal/unofficial endpoint and is not affiliated with this project. Availability and response behavior may change independently of Auto Lyrics.
+
+## PetitLyrics local configuration
 
 Copy the tracked template:
 
@@ -103,9 +193,9 @@ PETITLYRICS_PKG_NAME=your-package-name
 PETITLYRICS_CLIENT_APP_ID=your-client-app-id
 ```
 
-`.env` is ignored by Git and must not be committed. Keep `.env.example` safe to commit; it is a tracked template and should not contain credentials that must remain private.
+`.env` is ignored by Git and must not be committed. `.env.example` is tracked and should remain safe to publish.
 
-`app/build.gradle.kts` resolves each value with this precedence:
+`app/build.gradle.kts` resolves configuration with this precedence:
 
 ```text
 process environment
@@ -115,71 +205,194 @@ process environment
 .env.example
 ```
 
-If neither local file provides a non-empty value, the corresponding value is compiled as an empty string. When any required PetitLyrics value is empty, `PetitLyricsClient.isConfigured` is false and the provider is skipped cleanly.
+If any required value is empty, `PetitLyricsClient.isConfigured` is false and PetitLyrics is skipped cleanly.
 
-### Important credential note
+### Credential model
 
-These values are injected into Android `BuildConfig`. This keeps them out of Git, but **does not make them secret inside a distributed APK**. A sufficiently motivated user can extract client-side constants from an APK. Do not use credentials whose security model assumes they can remain confidential on an end-user device.
+These identifiers are compiled into Android `BuildConfig`. Keeping them in `.env` / GitHub Actions secrets prevents accidental source-control disclosure, but **does not make them secret inside a distributed APK**. Do not use credentials whose security model requires them to remain confidential on the client device.
 
-## GitHub Actions / Release configuration
+## Cache policy
 
-Repository Actions secrets should be created with the same four names:
+Cache identity currently includes:
 
 ```text
-PETITLYRICS_USER_ID
-PETITLYRICS_APP_NAME
-PETITLYRICS_PKG_NAME
-PETITLYRICS_CLIENT_APP_ID
+cache namespace (v11)
+normalized title
+normalized artist
+normalized album
+rounded duration in seconds
 ```
 
-`.github/workflows/build.yml` injects these secrets only for `v*` tag builds. Ordinary pull-request and `main` CI artifacts compile with empty PetitLyrics values, so the provider is disabled there and the identifiers are not embedded in routine artifacts.
+A cached result is displayed immediately. Its per-entry `refreshAfterMs` decides whether a background provider comparison is needed.
 
-For a `v*` tag, the workflow validates that **all four** PetitLyrics release secrets are non-empty before testing/building. This prevents accidentally publishing a release APK with PetitLyrics silently disabled.
+- **Fully corroborated comparison:** 7 days.
+- **Incomplete/provisional comparison:** 15 minutes.
 
-### Release procedure
+When PetitLyrics is configured, the current implementation considers the provider set complete only when both LRCLIB and PetitLyrics return candidates and neither times out. This is intentionally conservative.
 
-1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. Merge the release changes into `main`.
-3. Confirm the four GitHub Actions secrets are configured in the repository.
-4. Create and push a matching version tag, for example:
+### Known cache-result limitation
 
-```bash
-git tag v1.9.8
-git push origin v1.9.8
+Provider clients still collapse several outcomes to `null`; the `MediaTracker` boundary does not yet distinguish:
+
+```text
+NOT_FOUND
+TRANSIENT_ERROR
+TIMEOUT
 ```
 
-The `Build APK` workflow validates release configuration, runs unit tests, builds the release APK with the GitHub Actions secret values injected, renames the APK with the version name, and creates the GitHub Release for `v*` tags.
+Timeout itself is tracked, but a clean provider “no result” and some transient failures are otherwise indistinguishable. As a result, a legitimate one-provider-only song can remain on the 15-minute refresh policy instead of the normal 7-day policy. This costs extra network traffic but avoids pinning a fallback result for a week after a temporary outage.
 
-For local debug builds, a populated `.env` is sufficient:
+A future cleanup can replace the nullable provider boundary with an explicit result type such as `Found / NotFound / TransientError`.
+
+## Android Auto browse UI
+
+`LyricsBrowserService` exposes three root browse items in this order:
+
+```text
+Lyrics | Sync | More
+```
+
+Keeping Lyrics first makes it the primary/default browse section.
+
+### Lyrics tab
+
+For synchronized and plain lyrics:
+
+- current row is marked with `▶`,
+- surrounding rows reserve a matching visual gutter,
+- **5 rows** are shown when no translations are present,
+- **3 rows** are shown when translated subtitles are present.
+
+The current line is kept near the center where track boundaries allow it.
+
+The track header includes artist, position/duration, synchronization state, provider, and detected language where available.
+
+### Sync tab
+
+The Sync tab is intentionally independent from the adaptive Lyrics window. It uses a fixed:
+
+```text
+SYNC_WINDOW_SIZE = 3
+```
+
+It shows the previous/current/next lyric context when possible, plus:
+
+```text
+AA Offset
+−50 ms
++50 ms
+```
+
+The current Sync row can use the same karaoke-text helper when word data exists.
+
+### More tab
+
+More contains detail rows for the available metadata:
+
+- Title
+- Artist
+- Album
+- Provider
+- Lyrics state (Synced / Not synced / etc.)
+- Detected language
+- Duration
+- AA Offset
+
+### Now-playing subtitle
+
+`MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE` carries the current lyric text. The original lyric line is prefixed with `▶`. When translation is available, it is placed on the second line without a second marker.
+
+### Browse refresh behavior
+
+Browse refreshes notify the three section IDs rather than rebuilding the root tabs on every lyric update. Updates are throttled to reduce Android Auto browse churn.
+
+## Android Auto constants
+
+Current `LyricsBrowserService` UI constants:
+
+| Constant | Value | Purpose |
+|---|---:|---|
+| `SYNC_WINDOW_SIZE` | 3 | Fixed lyric row count in Sync. |
+| `DEFAULT_WINDOW_SIZE` | 5 | Lyrics-tab row count without translations. |
+| `TRANSLATED_WINDOW_SIZE` | 3 | Lyrics-tab row count when translations exist. |
+| `CURRENT_LINE_PREFIX` | `▶  ` | Current row marker. |
+| `IDLE_LINE_PREFIX` | em-space + en-space | Visual gutter matching the marker width. |
+| `PAD_WIDTH` | 60 | Character padding for browse items. |
+| `NOTIFY_THROTTLE_MS` | 500 ms | Minimum browse-tree refresh interval. |
+| `BROWSE_KARAOKE_WINDOW_MS` | 600 ms | Word-highlight look-ahead used by browse text when words exist. |
+| `SUBTITLE_KARAOKE_WINDOW_MS` | 300 ms | Word-highlight look-ahead used by now-playing subtitle when words exist. |
+| `SESSION_REFRESH_MS` | 1500 ms | MediaSession playback-state refresh interval. |
+| `PLAIN_LOOP_DELAY_MS` | 2000 ms | Plain-lyrics browse advance check interval. |
+
+## GitHub Actions
+
+`.github/workflows/build.yml` runs for:
+
+- pull requests to `main`,
+- pushes to `main`,
+- tags matching `v*`.
+
+PR/main builds:
+
+- run unit tests,
+- build a debug APK,
+- do **not** inject PetitLyrics repository secrets.
+
+`v*` tag builds:
+
+- validate all four PetitLyrics release secrets,
+- run unit tests,
+- build the release APK,
+- inject the PetitLyrics values through environment variables,
+- copy the APK to `auto-lyrics-${versionName}.apk`,
+- upload the artifact,
+- create a GitHub Release.
+
+Release mechanics, including the required `versionName`/tag match, are documented in [RELEASE.md](RELEASE.md).
+
+## Tests and regression checklist
+
+Run local unit tests before pushing provider/resolver changes:
 
 ```powershell
 .\gradlew.bat testDebugUnitTest
 .\gradlew.bat assembleDebug
 ```
 
-## Key Files
+Provider/matching regression cases should continue to cover:
+
+- Japanese native-script artist vs romanized player metadata with valid corroboration.
+- Cross-script same-title candidate without corroboration is rejected.
+- Multi-contributor player metadata can match one exact contributor on a near-exact title.
+- Unrelated contributor does not become a valid artist match.
+- Japanese/Latin interleaved lyric payload receives a quality penalty.
+- PetitLyrics Type 3 parsing.
+- PetitLyrics Type 2 timing decode + Type 1 companion selection.
+- Synchronized candidates outrank plain candidates.
+
+Manual DHU regression pass after Android Auto UI changes:
+
+1. Lyrics / Sync / More tabs are in that order.
+2. Lyrics shows 5 rows without translation and 3 with translation.
+3. Current-row `▶` gutter aligns with surrounding lyric text.
+4. Sync stays at exactly 3 lyric rows when enough lines exist.
+5. `−50 ms` / `+50 ms` changes AA offset and refreshes the view.
+6. More shows current provider/details without affecting lyrics timing.
+7. Now-playing subtitle marks the current lyric with `▶`.
+8. Plain lyrics still advance and use the same current-row alignment.
+
+## Key files
 
 | File | Purpose |
 |---|---|
-| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Media tracking, parallel provider execution, timeout budget, cache refresh policy. |
-| `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB search and candidate matching. |
-| `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | Optional PetitLyrics Type 3/Type 2 client and parsers. |
+| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Active media tracking, provider concurrency/budgets, resolver orchestration, cache refresh policy. |
+| `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB lookup, provider-specific matching, relaxed search. |
+| `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | PetitLyrics search, Type 3/Type 2 parsing, query provenance. |
 | `app/src/main/java/com/autolyrics/lyrics/LyricsProviderResolver.kt` | Common metadata/quality/source scoring and final provider selection. |
-| `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Lyrics cache keyed by normalized title, artist, album, and duration with per-entry refresh interval. |
-| `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Query metadata cleanup. |
-| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto browse + MediaSession integration. |
-| `.env.example` | Local PetitLyrics configuration template and no-`.env` fallback. |
-| `.github/workflows/build.yml` | CI, tests, APK artifact, tagged GitHub releases, and release-secret validation. |
-
-## Android Auto Browse Constants
-
-| Constant | Value | Purpose |
-|---|---|---|
-| `WINDOW_SIZE` | 3 | Number of synchronized lines in the AA browse window. |
-| `PLAIN_WINDOW_SIZE` | 4 | Number of unsynchronized lines in the AA browse window. |
-| `PAD_WIDTH` | 60 | Character padding for browse items. |
-| `NOTIFY_THROTTLE_MS` | 500 ms | Minimum browse-tree refresh interval. |
-| `BROWSE_KARAOKE_WINDOW_MS` | 600 ms | Legacy word-timing display window. |
-| `SUBTITLE_KARAOKE_WINDOW_MS` | 300 ms | Legacy now-playing word-timing display window. |
-| `SESSION_REFRESH_MS` | 1500 ms | MediaSession refresh interval. |
-| `PLAIN_LOOP_DELAY_MS` | 2000 ms | Plain lyrics browse advance interval. |
+| `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Persistent lyrics cache and per-entry refresh interval. |
+| `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Player metadata cleanup before provider search. |
+| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls. |
+| `app/src/main/res/xml/automotive_app_desc.xml` | Declares the Android Auto media integration. |
+| `.env.example` | Local PetitLyrics template / no-`.env` fallback. |
+| `.github/workflows/build.yml` | CI, release build, release-secret injection/validation, GitHub Release creation. |
+| `RELEASE.md` | Release checklist and version/tag invariants. |
