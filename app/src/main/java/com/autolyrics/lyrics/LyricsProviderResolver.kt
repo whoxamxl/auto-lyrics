@@ -22,7 +22,8 @@ data class LyricsProviderCandidate(
     val lines: List<LyricLine>,
     val status: LyricsStatus,
     val source: String,
-    val syncKind: SyncKind
+    val syncKind: SyncKind,
+    val artistQueryCorroborated: Boolean = false
 ) {
     enum class SyncKind {
         WORD_SYNC,
@@ -138,16 +139,18 @@ object LyricsProviderResolver {
         }
 
         // Romanized player metadata and native Japanese provider metadata are not
-        // directly comparable. Do not blindly neutralize that mismatch, though:
-        // an exact title alone is unsafe for covers/same-title songs. Require a
-        // second piece of evidence (matching album or strong duration) before the
-        // artist mismatch is treated as unknown rather than wrong.
+        // directly comparable. Exact-title cross-script matches are allowed only
+        // when there is independent corroboration. For PetitLyrics, a candidate
+        // returned by a request that explicitly included key_artist is itself
+        // useful evidence even when the returned artist is written in another
+        // script. Title-only fallback candidates still need album/duration evidence.
         val crossScriptArtist = rawArtistScore != null &&
             rawArtistScore < MIN_ARTIST_SCORE &&
             titleScore >= 0.95 &&
             scriptsClearlyDifferent(track.artist, candidate.artist)
         val secondaryEvidence =
-            (albumScore != null && albumScore >= CROSS_SCRIPT_ALBUM_EVIDENCE) ||
+            candidate.artistQueryCorroborated ||
+                (albumScore != null && albumScore >= CROSS_SCRIPT_ALBUM_EVIDENCE) ||
                 (durationScore != null && durationScore >= 0.85)
 
         val artistScore = if (crossScriptArtist && secondaryEvidence) {
