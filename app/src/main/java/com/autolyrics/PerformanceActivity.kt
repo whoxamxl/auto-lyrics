@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.autolyrics.lyrics.KaraokeTiming
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
@@ -232,6 +233,7 @@ class PerformanceActivity : AppCompatActivity() {
         accentBg: Int
     ): SpannableStringBuilder {
         val ssb = SpannableStringBuilder()
+        val separator = KaraokeTiming.separatorFor(line)
         line.words.forEachIndexed { wi, word ->
             val start = ssb.length
             ssb.append(word.text)
@@ -244,7 +246,7 @@ class PerformanceActivity : AppCompatActivity() {
                 ssb.setSpan(BackgroundColorSpan(accentBg), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
 
-            if (wi < line.words.size - 1) ssb.append(" ")
+            if (wi < line.words.size - 1) ssb.append(separator)
         }
         return ssb
     }
