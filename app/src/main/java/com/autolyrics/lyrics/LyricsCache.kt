@@ -23,7 +23,8 @@ class LyricsCache(context: Context) {
         val lines: List<CachedLine>,
         val status: String,
         val source: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val refreshAfterMs: Long = 0L
     )
 
     data class CachedLine(
@@ -67,7 +68,8 @@ class LyricsCache(context: Context) {
         track: TrackInfo,
         lines: List<LyricLine>,
         status: LyricsStatus,
-        source: String
+        source: String,
+        refreshAfterMs: Long = DEFAULT_REFRESH_AFTER_MS
     ) {
         try {
             val cached = CachedResult(
@@ -80,7 +82,8 @@ class LyricsCache(context: Context) {
                 },
                 status = status.name,
                 source = source,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                refreshAfterMs = refreshAfterMs.coerceAtLeast(1L)
             )
             val file = cacheFile(track)
             file.writeText(gson.toJson(cached))
@@ -101,6 +104,18 @@ class LyricsCache(context: Context) {
         }
     }
 
+    fun getRefreshAfterMs(track: TrackInfo): Long {
+        val file = cacheFile(track)
+        if (!file.exists()) return 0L
+        return try {
+            val json = file.readText()
+            val cached = gson.fromJson(json, CachedResult::class.java)
+            cached.refreshAfterMs.takeIf { it > 0L } ?: DEFAULT_REFRESH_AFTER_MS
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
     private fun cacheFile(track: TrackInfo): File {
         val durationSec = if (track.durationMs > 0) {
             ((track.durationMs + 500L) / 1000L).toString()
@@ -109,7 +124,7 @@ class LyricsCache(context: Context) {
         }
 
         val key = listOf(
-            "v8",
+            "v9",
             normalizeKeyPart(track.title),
             normalizeKeyPart(track.artist),
             normalizeKeyPart(track.album),
@@ -124,5 +139,9 @@ class LyricsCache(context: Context) {
         return Normalizer.normalize(value, Normalizer.Form.NFKC)
             .lowercase(Locale.ROOT)
             .trim()
+    }
+
+    companion object {
+        const val DEFAULT_REFRESH_AFTER_MS = 7L * 24 * 60 * 60 * 1000
     }
 }
