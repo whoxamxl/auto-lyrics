@@ -46,7 +46,8 @@ object PetitLyricsClient {
         val matchedArtist: String = "",
         val matchedAlbum: String = "",
         val matchedDurationSec: Double? = null,
-        val lyricsId: String? = null
+        val lyricsId: String? = null,
+        val artistQueryCorroborated: Boolean = false
     )
 
     internal data class PetitLyricsCandidate(
@@ -56,7 +57,8 @@ object PetitLyricsClient {
         val album: String,
         val lyricsType: Int,
         val lyricsData: String,
-        val durationSec: Double? = null
+        val durationSec: Double? = null,
+        val artistQueryCorroborated: Boolean = false
     )
 
     private data class SearchQuery(
@@ -106,7 +108,13 @@ object PetitLyricsClient {
                 logLabel = query.label
             )
 
-            val ranked = rankCandidates(candidates, title, artist, album)
+            val ranked = rankCandidates(
+                candidates = candidates,
+                requestedTitle = title,
+                requestedArtist = artist,
+                requestedAlbum = album,
+                artistQueryCorroborated = query.artist.isNotBlank()
+            )
             debugLog("${query.label}: candidates=${candidates.size}, acceptable=${ranked.size}")
 
             for (candidate in ranked) {
@@ -119,7 +127,8 @@ object PetitLyricsClient {
                 if (result != null) {
                     debugLog(
                         "accepted lyricsType=${result.lyricsType}, lines=${result.lines.size}, " +
-                            "match=${candidate.lyricsId ?: "metadata"}"
+                            "match=${candidate.lyricsId ?: "metadata"}, " +
+                            "artistQuery=${candidate.artistQueryCorroborated}"
                     )
                     return result
                 }
@@ -168,7 +177,8 @@ object PetitLyricsClient {
             matchedArtist = candidate.artist,
             matchedAlbum = candidate.album,
             matchedDurationSec = candidate.durationSec,
-            lyricsId = candidate.lyricsId
+            lyricsId = candidate.lyricsId,
+            artistQueryCorroborated = candidate.artistQueryCorroborated
         )
     }
 
@@ -339,16 +349,24 @@ object PetitLyricsClient {
         candidates: List<PetitLyricsCandidate>,
         requestedTitle: String,
         requestedArtist: String,
-        requestedAlbum: String
+        requestedAlbum: String,
+        artistQueryCorroborated: Boolean = false
     ): PetitLyricsCandidate? {
-        return rankCandidates(candidates, requestedTitle, requestedArtist, requestedAlbum).firstOrNull()
+        return rankCandidates(
+            candidates = candidates,
+            requestedTitle = requestedTitle,
+            requestedArtist = requestedArtist,
+            requestedAlbum = requestedAlbum,
+            artistQueryCorroborated = artistQueryCorroborated
+        ).firstOrNull()
     }
 
     private fun rankCandidates(
         candidates: List<PetitLyricsCandidate>,
         requestedTitle: String,
         requestedArtist: String,
-        requestedAlbum: String
+        requestedAlbum: String,
+        artistQueryCorroborated: Boolean = false
     ): List<PetitLyricsCandidate> {
         val track = TrackInfo(
             title = requestedTitle,
@@ -358,25 +376,29 @@ object PetitLyricsClient {
         )
 
         return candidates.mapIndexedNotNull { index, candidate ->
+            val evidencedCandidate = candidate.copy(
+                artistQueryCorroborated = candidate.artistQueryCorroborated || artistQueryCorroborated
+            )
             val normalized = LyricsProviderCandidate(
                 provider = "PetitLyrics",
-                title = candidate.title.ifBlank { requestedTitle },
-                artist = candidate.artist,
-                album = candidate.album,
+                title = evidencedCandidate.title.ifBlank { requestedTitle },
+                artist = evidencedCandidate.artist,
+                album = evidencedCandidate.album,
                 durationSec = null,
                 lines = listOf(LyricLine(0L, "candidate")),
                 status = LyricsStatus.FOUND,
                 source = "PetitLyrics · candidate",
-                syncKind = when (candidate.lyricsType) {
+                syncKind = when (evidencedCandidate.lyricsType) {
                     3 -> LyricsProviderCandidate.SyncKind.WORD_SYNC
                     2 -> LyricsProviderCandidate.SyncKind.LINE_SYNC
                     else -> LyricsProviderCandidate.SyncKind.PLAIN
-                }
+                },
+                artistQueryCorroborated = evidencedCandidate.artistQueryCorroborated
             )
             val score = LyricsProviderResolver.metadataScore(track, normalized)
                 ?: return@mapIndexedNotNull null
             if (score < MIN_PROVIDER_METADATA_SCORE) return@mapIndexedNotNull null
-            Triple(candidate, score, index)
+            Triple(evidencedCandidate, score, index)
         }
             .sortedWith(
                 compareByDescending<Triple<PetitLyricsCandidate, Double, Int>> { it.second }
