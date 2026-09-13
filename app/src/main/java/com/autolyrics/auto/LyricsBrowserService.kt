@@ -160,13 +160,20 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             "Custom browse action limit=$customBrowseActionLimit client=$clientPackageName"
         )
 
-        val rootExtras = Bundle()
-        if (customBrowseActionLimit > 0) {
-            rootExtras.putParcelableArrayList(
+        // Diagnostic experiment: advertise both actions even when the host reports
+        // a custom browse action limit of 0. This deliberately ignores host capability
+        // hints so we can verify whether this DHU merely reports the capability
+        // incorrectly or truly cannot render Custom Browse Actions.
+        val rootExtras = Bundle().apply {
+            putParcelableArrayList(
                 MediaConstants.BROWSER_SERVICE_EXTRAS_KEY_CUSTOM_BROWSER_ACTION_ROOT_LIST,
                 createCustomBrowseActions()
             )
         }
+        android.util.Log.i(
+            "LyricsBrowserService",
+            "Forcing 2 custom browse actions despite reported limit=$customBrowseActionLimit"
+        )
         return BrowserRoot(ROOT_ID, rootExtras)
     }
 
@@ -602,11 +609,10 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         )
     }
 
-    private fun syncBrowseActionIds(): ArrayList<String> {
-        if (customBrowseActionLimit <= 0) return arrayListOf()
-        val actions = listOf(ACTION_SYNC_DELAY, ACTION_SYNC_ADVANCE)
-        return ArrayList(actions.take(customBrowseActionLimit.coerceAtMost(actions.size)))
-    }
+    private fun syncBrowseActionIds(): ArrayList<String> = arrayListOf(
+        ACTION_SYNC_DELAY,
+        ACTION_SYNC_ADVANCE
+    )
 
     private fun syncOffsetDescription(): String {
         val sign = if (aaOffsetMs >= 0) "+" else ""
