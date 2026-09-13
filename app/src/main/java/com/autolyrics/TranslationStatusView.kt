@@ -42,8 +42,8 @@ class TranslationStatusView @JvmOverloads constructor(
         minWidth = 0
         minimumWidth = 0
         minimumHeight = 0
-        backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2A2A3E"))
-        setTextColor(Color.parseColor("#CCCCDD"))
+        backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4A252C"))
+        setTextColor(Color.parseColor("#D7A0A8"))
         setPadding(dp(12), 0, dp(12), 0)
         visibility = View.GONE
         setOnClickListener { retryTranslation() }
@@ -196,8 +196,8 @@ class TranslationStatusView @JvmOverloads constructor(
 
         // Clear the explicit per-language retry gate first. Toggling the preference
         // then asks MediaTracker to re-run translation for the currently loaded track.
-        // If an earlier ML Kit download Task is still alive, LyricsTranslator reuses it
-        // rather than starting a duplicate request.
+        // prepareManualRetry() also restarts a failed model monitor independently, so
+        // Retry still works if the current track is English or has no lyrics.
         LyricsTranslator.prepareManualRetry()
         prefs.edit().putBoolean(TRANSLATION_ENABLED_KEY, false).apply()
         postDelayed({
