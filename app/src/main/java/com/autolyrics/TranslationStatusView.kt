@@ -10,13 +10,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.autolyrics.lyrics.LyricsTranslator
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -49,13 +49,11 @@ class TranslationStatusView @JvmOverloads constructor(
         setOnClickListener { retryTranslation() }
     }
 
-    private val progressBar = ProgressBar(
-        context,
-        null,
-        android.R.attr.progressBarStyleHorizontal
-    ).apply {
+    private val progressBar = LinearProgressIndicator(context).apply {
         isIndeterminate = true
-        indeterminateTintList = ColorStateList.valueOf(Color.parseColor("#BB86FC"))
+        setIndicatorColor(Color.parseColor("#BB86FC"))
+        trackColor = Color.parseColor("#2A2A3E")
+        trackThickness = dp(3)
         visibility = View.GONE
     }
 
@@ -94,7 +92,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
         addView(
             progressBar,
-            LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)).apply {
+            LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(4)
             }
         )
@@ -125,6 +123,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
     private fun render(state: LyricsTranslator.UiState) {
         if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) {
+            progressBar.hide()
             visibility = View.GONE
             return
         }
@@ -169,6 +168,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
 
         if (text == null) {
+            progressBar.hide()
             visibility = View.GONE
             return
         }
@@ -182,7 +182,12 @@ class TranslationStatusView @JvmOverloads constructor(
                 Color.parseColor("#AAAACC")
             }
         )
-        progressBar.visibility = if (running) View.VISIBLE else View.GONE
+
+        if (running) {
+            progressBar.show()
+        } else {
+            progressBar.hide()
+        }
         retryButton.visibility = if (canRetry) View.VISIBLE else View.GONE
     }
 
