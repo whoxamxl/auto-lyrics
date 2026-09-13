@@ -84,6 +84,13 @@ class MainActivity : AppCompatActivity() {
         userScrolling = false
         btnJumpToCurrent.visibility = View.GONE
     }
+    private val aaPrefsListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
+            if (key == AA_OFFSET_PREF_KEY) {
+                aaOffsetMs = sp.getLong(AA_OFFSET_PREF_KEY, 0L)
+                updateAaDelayDisplay()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -179,8 +186,9 @@ class MainActivity : AppCompatActivity() {
         tvAaDelay = findViewById(R.id.tv_aa_delay)
 
         switchAaKaraoke.isChecked = prefs.getBoolean("aa_karaoke_enabled", true)
-        aaOffsetMs = prefs.getLong("aa_offset_ms", 0L)
+        aaOffsetMs = prefs.getLong(AA_OFFSET_PREF_KEY, 0L)
         updateAaDelayDisplay()
+        prefs.registerOnSharedPreferenceChangeListener(aaPrefsListener)
 
         switchAaKaraoke.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("aa_karaoke_enabled", isChecked).apply()
@@ -193,18 +201,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btn_aa_delay_minus).setOnClickListener {
-            aaOffsetMs -= 100
-            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
+            aaOffsetMs -= AA_SYNC_STEP_MS
+            prefs.edit().putLong(AA_OFFSET_PREF_KEY, aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
         findViewById<Button>(R.id.btn_aa_delay_plus).setOnClickListener {
-            aaOffsetMs += 100
-            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
+            aaOffsetMs += AA_SYNC_STEP_MS
+            prefs.edit().putLong(AA_OFFSET_PREF_KEY, aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", 0L).apply()
+            prefs.edit().putLong(AA_OFFSET_PREF_KEY, 0L).apply()
             updateAaDelayDisplay()
         }
 
@@ -478,10 +486,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        aaOffsetMs = prefs.getLong(AA_OFFSET_PREF_KEY, 0L)
+        updateAaDelayDisplay()
         updatePermissionUi()
     }
 
     override fun onDestroy() {
+        prefs.unregisterOnSharedPreferenceChangeListener(aaPrefsListener)
         stopPlainScroll()
         super.onDestroy()
     }
@@ -716,6 +727,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val AA_OFFSET_PREF_KEY = "aa_offset_ms"
+        private const val AA_SYNC_STEP_MS = 50L
         private val DEFAULT_BG = Color.parseColor("#121212")
         private val DEFAULT_APP_BAR = Color.parseColor("#1E1E2E")
         private val DEFAULT_DELAY_BAR = Color.parseColor("#1A1A2A")
