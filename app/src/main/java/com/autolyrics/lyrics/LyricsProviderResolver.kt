@@ -133,7 +133,11 @@ object LyricsProviderResolver {
         }
 
         val rawArtistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
-            LrcLibClient.stringSimilarity(track.artist, candidate.artist)
+            LrcLibClient.artistSimilarity(
+                left = track.artist,
+                right = candidate.artist,
+                allowContributorComponents = titleScore >= 0.95
+            )
         } else {
             null
         }
@@ -144,6 +148,10 @@ object LyricsProviderResolver {
         // returned by a request that explicitly included key_artist is itself
         // useful evidence even when the returned artist is written in another
         // script. Title-only fallback candidates still need album/duration evidence.
+        //
+        // Multi-contributor media metadata is handled before this check: if one
+        // comma/semicolon-delimited contributor exactly matches the provider artist,
+        // artistSimilarity() supplies a strong score for near-exact titles.
         val crossScriptArtist = rawArtistScore != null &&
             rawArtistScore < MIN_ARTIST_SCORE &&
             titleScore >= 0.95 &&
