@@ -103,9 +103,19 @@ PETITLYRICS_PKG_NAME=your-package-name
 PETITLYRICS_CLIENT_APP_ID=your-client-app-id
 ```
 
-`.env` is ignored by Git and must not be committed.
+`.env` is ignored by Git and must not be committed. Keep `.env.example` safe to commit; it is a tracked template and should not contain credentials that must remain private.
 
-`app/build.gradle.kts` reads each value from the process environment first and then falls back to the local `.env` file. Missing values are compiled as empty strings, in which case `PetitLyricsClient.isConfigured` is false and the provider is skipped cleanly.
+`app/build.gradle.kts` resolves each value with this precedence:
+
+```text
+process environment
+    ↓ if missing/blank
+.env
+    ↓ only when .env itself does not exist
+.env.example
+```
+
+If neither local file provides a non-empty value, the corresponding value is compiled as an empty string. When any required PetitLyrics value is empty, `PetitLyricsClient.isConfigured` is false and the provider is skipped cleanly.
 
 ### Important credential note
 
@@ -158,7 +168,7 @@ For local debug builds, a populated `.env` is sufficient:
 | `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Lyrics cache keyed by normalized title, artist, album, and duration with per-entry refresh interval. |
 | `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Query metadata cleanup. |
 | `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto browse + MediaSession integration. |
-| `.env.example` | Local PetitLyrics configuration template. |
+| `.env.example` | Local PetitLyrics configuration template and no-`.env` fallback. |
 | `.github/workflows/build.yml` | CI, tests, APK artifact, tagged GitHub releases, and release-secret validation. |
 
 ## Android Auto Browse Constants
