@@ -193,11 +193,12 @@ class TranslationStatusView @JvmOverloads constructor(
 
     private fun retryTranslation() {
         retryButton.isEnabled = false
-        LyricsTranslator.resetUiState()
 
-        // MediaTracker already reacts to this preference. Toggle it briefly so the
-        // currently loaded lyrics are translated again without changing tracks or
-        // re-querying a lyrics provider.
+        // Clear the explicit per-language retry gate first. Toggling the preference
+        // then asks MediaTracker to re-run translation for the currently loaded track.
+        // If an earlier ML Kit download Task is still alive, LyricsTranslator reuses it
+        // rather than starting a duplicate request.
+        LyricsTranslator.prepareManualRetry()
         prefs.edit().putBoolean(TRANSLATION_ENABLED_KEY, false).apply()
         postDelayed({
             prefs.edit().putBoolean(TRANSLATION_ENABLED_KEY, true).apply()
