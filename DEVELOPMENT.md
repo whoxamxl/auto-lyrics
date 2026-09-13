@@ -44,7 +44,7 @@ AutoLyricsApp
 
 When PetitLyrics is configured, LRCLIB and PetitLyrics are started in parallel. Each provider gets a **5 second total budget** at the `MediaTracker` layer; PetitLyrics HTTP calls also use a 4 second per-call timeout. Healthy requests are normally much faster than this, so a stalled provider cannot hold a track change for the old 10–15 second socket timeout window.
 
-Provider-specific code performs search/fallback and produces plausible candidates. PetitLyrics candidate ranking now delegates metadata validation to the same `LyricsProviderResolver.metadataScore()` logic used for the final cross-provider comparison, avoiding a separate title/artist/album scoring formula. LRCLIB retains its existing search-side matcher because it uses LRCLIB-specific duration and endpoint behavior; the final LRCLIB-vs-PetitLyrics decision is still made only by the common resolver.
+Provider-specific code performs search/fallback and produces plausible candidates. PetitLyrics candidate ranking delegates metadata validation to the same `LyricsProviderResolver.metadataScore()` logic used for the final cross-provider comparison, avoiding a second title/artist/album scoring formula. LRCLIB retains its search-side matcher because it uses LRCLIB-specific duration and endpoint behavior; the final LRCLIB-vs-PetitLyrics decision is still made only by the common resolver.
 
 The common final comparison is:
 
@@ -80,7 +80,7 @@ Supported formats:
 - **lyricsType=3 / WSY** — word-sync XML. Auto Lyrics currently imports the first word start time of each line as the line timestamp; word-level karaoke timing is not surfaced.
 - **lyricsType=2 / LSY** — binary line-sync timing. Auto Lyrics decodes the timing payload and retrieves a **lyricsType=1** companion text payload, preferably by the same `lyricsId`, then combines them into line-synced lyrics.
 
-PetitLyrics search progressively relaxes from `title + artist + album` to `title + artist`, then `title-only`, while local metadata validation prevents weak results from winning just because they were returned first. Type-1 companion selection is also metadata-ranked if an exact `lyricsId` lookup is unavailable.
+PetitLyrics search progressively relaxes from `title + artist + album` to `title + artist`, then `title-only`, while local metadata validation prevents weak results from winning just because they were returned first. Type-1 companion selection is metadata-ranked if an exact `lyricsId` lookup is unavailable, so the first returned Type-1 record is no longer accepted blindly.
 
 This integration uses an internal/unofficial PetitLyrics endpoint and is not affiliated with PetitLyrics. Availability and behavior may change independently of Auto Lyrics.
 
