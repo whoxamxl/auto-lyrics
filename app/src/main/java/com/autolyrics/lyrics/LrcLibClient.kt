@@ -28,9 +28,11 @@ object LrcLibClient {
     private const val MIN_ARTIST_SCORE = 0.40
     private const val EARLY_EXACT_SCORE = 0.95
     private const val MAX_DURATION_DELTA_SEC = 15.0
+    private const val CONTRIBUTOR_COMPONENT_SCORE = 0.95
 
     private val MULTI_SPACE = Regex("""\s+""")
     private val NON_WORD = Regex("""[^\p{L}\p{N}]+""")
+    private val CONTRIBUTOR_SEPARATOR = Regex("""\s*[,;]\s*""")
     private val FEAT_SUFFIX = Regex(
         """\s*[\(\[]?\s*(?:feat(?:uring)?|ft)\.?\s+.+?[\)\]]?\s*$""",
         RegexOption.IGNORE_CASE
@@ -156,6 +158,22 @@ object LrcLibClient {
             requireSynced = true
         )?.let { return it }
 
+        // Some media sessions expose a contributor list instead of the performing
+        // artist (for example composer, lyricist, vocalist and studio/brand names
+        // concatenated with commas). If artist-constrained FTS could not find a
+        // usable synchronized result, broaden discovery by title only and let the
+        // local matcher validate title, contributor components, duration and album.
+        addCandidates(searchAll(strippedTitle, artistName = null, albumName = null))
+
+        selectBest(
+            candidates.values,
+            trackName,
+            artistName,
+            albumName,
+            durationSec,
+            requireSynced = true
+        )?.let { return it }
+
         // A free-text fallback helps when field-specific FTS matching is defeated
         // by collaboration/feature metadata differences. It is only used when no
         // acceptable synchronized result was found by the structured searches.
@@ -233,15 +251,19 @@ object LrcLibClient {
         val artistScore = if (artistName.isBlank() || candidateArtist.isBlank()) {
             null
         } else {
-            artistSimilarity(artistName, candidateArtist)
+            artistSimilarity(
+                left = artistName,
+                right = candidateArtist,
+                allowContributorComponents = titleScore >= 0.95
+            )
         }
 
         val durationScore = durationSimilarity(durationSec, candidate.duration)
         if (durationScore != null && durationScore < 0.0) return null
 
         // Reject a clearly different artist unless title + duration are both
-        // exceptionally strong. This still tolerates common feat./ft. metadata
-        // differences through artistSimilarity().
+        // exceptionally strong. Exact contributor-component matches are admitted
+        // only for near-exact titles by artistSimilarity().
         if (artistScore != null && artistScore < MIN_ARTIST_SCORE) {
             val strongTitleAndDuration = titleScore >= 0.95 && (durationScore ?: 0.0) >= 0.85
             if (!strongTitleAndDuration) return null
@@ -320,11 +342,59 @@ object LrcLibClient {
         )
     }
 
-    private fun artistSimilarity(left: String, right: String): Double {
-        return maxOf(
+    internal fun artistSimilarity(
+        left: String,
+        right: String,
+        allowContributorComponents: Boolean = false
+    ): Double {
+        val direct = maxOf(
             stringSimilarity(left, right),
             stringSimilarity(stripFeaturing(left), stripFeaturing(right))
         )
+        if (!allowContributorComponents || direct >= CONTRIBUTOR_COMPONENT_SCORE) {
+            return direct
+        }
+
+        val leftVariants = artistVariants(left)
+        val rightVariants = artistVariants(right)
+        val hasComponentList = leftVariants.size > 1 || rightVariants.size > 1
+        if (!hasComponentList) return direct
+
+        val exactComponentMatch = leftVariants.any { leftVariant ->
+            rightVariants.any { rightVariant ->
+                stringSimilarity(leftVariant, rightVariant) >= 0.999
+            }
+        }
+
+        return if (exactComponentMatch) {
+            maxOf(direct, CONTRIBUTOR_COMPONENT_SCORE)
+        } else {
+            direct
+        }
+    }
+
+    private fun artistVariants(value: String): List<String> {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return emptyList()
+
+        val variants = linkedSetOf<String>()
+        fun addVariant(candidate: String) {
+            val normalized = candidate.trim()
+            if (normalized.isBlank()) return
+            variants += normalized
+            val withoutFeaturing = stripFeaturing(normalized)
+            if (withoutFeaturing.isNotBlank()) variants += withoutFeaturing
+        }
+
+        addVariant(trimmed)
+        val components = trimmed.split(CONTRIBUTOR_SEPARATOR)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        if (components.size >= 2) {
+            components.forEach(::addVariant)
+        }
+
+        return variants.toList()
     }
 
     internal fun stringSimilarity(left: String, right: String): Double {
