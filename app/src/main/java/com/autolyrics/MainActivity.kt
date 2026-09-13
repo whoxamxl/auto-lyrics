@@ -30,6 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.autolyrics.lyrics.KaraokeTiming
 import com.autolyrics.media.MediaListenerService
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.AlbumColors
@@ -397,6 +398,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
+                val separator = KaraokeTiming.separatorFor(line)
                 line.words.forEachIndexed { wi, word ->
                     val wordStart = ssb.length
                     ssb.append(word.text)
@@ -420,7 +422,7 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
 
-                    if (wi < line.words.size - 1) ssb.append(" ")
+                    if (wi < line.words.size - 1) ssb.append(separator)
                 }
                 ssb.setSpan(
                     StyleSpan(Typeface.BOLD),
