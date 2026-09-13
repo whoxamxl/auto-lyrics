@@ -9,9 +9,13 @@ import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
+import com.autolyrics.BuildConfig
 import com.autolyrics.lyrics.LrcLibClient
 import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
+import com.autolyrics.lyrics.LyricsProviderCandidate
+import com.autolyrics.lyrics.LyricsProviderResolver
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
 import com.autolyrics.lyrics.PetitLyricsClient
@@ -322,26 +326,52 @@ class MediaTracker private constructor(context: Context) {
         }
     }
 
-    private data class FetchResult(
-        val lines: List<LyricLine>,
-        val status: LyricsStatus,
-        val source: String
-    )
+    private suspend fun fetchBestLyrics(track: TrackInfo): LyricsProviderCandidate? = coroutineScope {
+        // Both providers are independent network sources. Start them together and
+        // resolve only after both have had a chance to return a candidate.
+        val lrcLibDeferred = async(Dispatchers.IO) { fetchFromLrcLib(track) }
+        val petitLyricsDeferred = if (PetitLyricsClient.isConfigured) {
+            async(Dispatchers.IO) { fetchFromPetitLyrics(track) }
+        } else {
+            null
+        }
 
-    private fun fetchBestLyrics(track: TrackInfo): FetchResult? {
-        // LRCLIB remains the primary source when it has a synchronized result.
-        // PetitLyrics is queried only when LRCLIB has no acceptable synced
-        // lyrics, allowing a PetitLyrics synced result to beat LRCLIB plain text.
-        val lrcLibResult = fetchFromLrcLib(track)
-        if (lrcLibResult?.status == LyricsStatus.FOUND) return lrcLibResult
+        val candidates = buildList {
+            lrcLibDeferred.await()?.let(::add)
+            petitLyricsDeferred?.await()?.let(::add)
+        }
 
-        val petitLyricsResult = fetchFromPetitLyrics(track)
-        if (petitLyricsResult != null) return petitLyricsResult
+        val scored = LyricsProviderResolver.scoreCandidates(track, candidates)
+        if (BuildConfig.DEBUG) {
+            scored.forEach { score ->
+                Log.d(
+                    PROVIDER_RESOLVER_TAG,
+                    "%s metadata=%.3f quality=%.3f confidence=%.3f final=%.3f kind=%s".format(
+                        score.candidate.provider,
+                        score.metadataScore,
+                        score.qualityScore,
+                        score.sourceConfidence,
+                        score.finalScore,
+                        score.candidate.syncKind
+                    )
+                )
+            }
+        }
 
-        return lrcLibResult
+        val selected = LyricsProviderResolver.selectBest(track, candidates)
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                PROVIDER_RESOLVER_TAG,
+                selected?.let {
+                    "selected=${it.candidate.provider} final=${"%.3f".format(it.finalScore)} " +
+                        "kind=${it.candidate.syncKind}"
+                } ?: "selected=none"
+            )
+        }
+        selected?.candidate
     }
 
-    private fun fetchFromPetitLyrics(track: TrackInfo): FetchResult? {
+    private fun fetchFromPetitLyrics(track: TrackInfo): LyricsProviderCandidate? {
         if (!PetitLyricsClient.isConfigured || track.artist.isBlank()) return null
 
         val result = try {
@@ -357,14 +387,25 @@ class MediaTracker private constructor(context: Context) {
         val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
         if (!hasRealText) return null
 
-        return FetchResult(
+        val syncKind = when (result.lyricsType) {
+            3 -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+            else -> LyricsProviderCandidate.SyncKind.LINE_SYNC
+        }
+
+        return LyricsProviderCandidate(
+            provider = "PetitLyrics",
+            title = result.matchedTitle.ifBlank { track.title },
+            artist = result.matchedArtist,
+            album = result.matchedAlbum,
+            durationSec = result.matchedDurationSec,
             lines = result.lines,
             status = LyricsStatus.FOUND,
-            source = "PetitLyrics · Synced"
+            source = "PetitLyrics · Synced",
+            syncKind = syncKind
         )
     }
 
-    private fun fetchFromLrcLib(track: TrackInfo): FetchResult? {
+    private fun fetchFromLrcLib(track: TrackInfo): LyricsProviderCandidate? {
         val durationSec = if (track.durationMs > 0) (track.durationMs / 1000).toInt() else 0
 
         val result = try {
@@ -381,14 +422,38 @@ class MediaTracker private constructor(context: Context) {
         if (result.syncedLyrics != null) {
             val lines = LrcParser.parse(result.syncedLyrics)
             val hasRealText = lines.any { it.text != "♪" && it.text.isNotBlank() }
-            if (hasRealText) return FetchResult(lines, LyricsStatus.FOUND, "LRCLIB · Synced")
+            if (hasRealText) {
+                return LyricsProviderCandidate(
+                    provider = "LRCLIB",
+                    title = result.trackName.orEmpty().ifBlank { track.title },
+                    artist = result.artistName.orEmpty(),
+                    album = result.albumName.orEmpty(),
+                    durationSec = result.duration,
+                    lines = lines,
+                    status = LyricsStatus.FOUND,
+                    source = "LRCLIB · Synced",
+                    syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
+                )
+            }
         }
 
         if (result.plainLyrics != null) {
             val lines = result.plainLyrics.lines()
                 .filter { it.isNotBlank() }
                 .map { text -> LyricLine(0L, text) }
-            if (lines.isNotEmpty()) return FetchResult(lines, LyricsStatus.PLAIN_ONLY, "LRCLIB · Plain")
+            if (lines.isNotEmpty()) {
+                return LyricsProviderCandidate(
+                    provider = "LRCLIB",
+                    title = result.trackName.orEmpty().ifBlank { track.title },
+                    artist = result.artistName.orEmpty(),
+                    album = result.albumName.orEmpty(),
+                    durationSec = result.duration,
+                    lines = lines,
+                    status = LyricsStatus.PLAIN_ONLY,
+                    source = "LRCLIB · Plain",
+                    syncKind = LyricsProviderCandidate.SyncKind.PLAIN
+                )
+            }
         }
 
         return null
@@ -414,6 +479,7 @@ class MediaTracker private constructor(context: Context) {
 
     companion object {
         private const val CACHE_REFRESH_MS = 7L * 24 * 60 * 60 * 1000
+        private const val PROVIDER_RESOLVER_TAG = "ProviderResolver"
 
         @Volatile
         private var instance: MediaTracker? = null
