@@ -9,11 +9,16 @@ import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
+import com.autolyrics.BuildConfig
 import com.autolyrics.lyrics.LrcLibClient
 import com.autolyrics.lyrics.LrcParser
 import com.autolyrics.lyrics.LyricsCache
+import com.autolyrics.lyrics.LyricsProviderCandidate
+import com.autolyrics.lyrics.LyricsProviderResolver
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
+import com.autolyrics.lyrics.PetitLyricsClient
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -276,18 +281,26 @@ class MediaTracker private constructor(context: Context) {
                     }
 
                     val cacheAge = lyricsCache.getAge(track)
-                    if (cacheAge < CACHE_REFRESH_MS) {
+                    val refreshAfterMs = lyricsCache.getRefreshAfterMs(track)
+                    if (refreshAfterMs > 0L && cacheAge < refreshAfterMs) {
                         return@launch
                     }
                 }
 
-                val result = fetchBestLyrics(track)
+                val decision = fetchBestLyrics(track)
+                val result = decision.candidate
 
                 withContext(Dispatchers.Main) {
                     if (_state.value.track != track) return@withContext
 
                     if (result != null) {
-                        lyricsCache.put(track, result.lines, result.status, result.source)
+                        lyricsCache.put(
+                            track = track,
+                            lines = result.lines,
+                            status = result.status,
+                            source = result.source,
+                            refreshAfterMs = decision.refreshAfterMs
+                        )
                         _state.value = _state.value.copy(
                             lines = result.lines,
                             currentIndex = -1,
@@ -321,17 +334,162 @@ class MediaTracker private constructor(context: Context) {
         }
     }
 
-    private data class FetchResult(
-        val lines: List<LyricLine>,
-        val status: LyricsStatus,
-        val source: String
+    private data class ProviderAttempt(
+        val provider: String,
+        val candidate: LyricsProviderCandidate?,
+        val timedOut: Boolean,
+        val elapsedMs: Long
     )
 
-    private fun fetchBestLyrics(track: TrackInfo): FetchResult? {
-        return fetchFromLrcLib(track)
+    private data class FetchDecision(
+        val candidate: LyricsProviderCandidate?,
+        val refreshAfterMs: Long
+    )
+
+    private suspend fun fetchBestLyrics(track: TrackInfo): FetchDecision = coroutineScope {
+        // Five seconds is a hard per-provider budget. Healthy responses observed in
+        // practice are normally sub-second; waiting 10-15 seconds for one source
+        // makes a track change feel broken. runInterruptible allows timeout/cancel
+        // to interrupt the synchronous OkHttp work rather than merely abandoning
+        // the Deferred while the blocking call keeps this fetch waiting.
+        val lrcLibDeferred = async {
+            fetchProviderWithBudget("LRCLIB") { fetchFromLrcLib(track) }
+        }
+        val petitLyricsDeferred = if (PetitLyricsClient.isConfigured) {
+            async {
+                fetchProviderWithBudget("PetitLyrics") { fetchFromPetitLyrics(track) }
+            }
+        } else {
+            null
+        }
+
+        val lrcAttempt = lrcLibDeferred.await()
+        val petitAttempt = petitLyricsDeferred?.await()
+        val attempts = listOfNotNull(lrcAttempt, petitAttempt)
+        val candidates = attempts.mapNotNull { it.candidate }
+
+        val scored = LyricsProviderResolver.scoreCandidates(track, candidates)
+        if (BuildConfig.DEBUG) {
+            attempts.forEach { attempt ->
+                Log.d(
+                    PROVIDER_RESOLVER_TAG,
+                    "${attempt.provider} fetch elapsed=${attempt.elapsedMs}ms " +
+                        "timedOut=${attempt.timedOut} candidate=${attempt.candidate != null}"
+                )
+            }
+            scored.forEach { score ->
+                Log.d(
+                    PROVIDER_RESOLVER_TAG,
+                    "%s metadata=%.3f quality=%.3f confidence=%.3f final=%.3f kind=%s".format(
+                        score.candidate.provider,
+                        score.metadataScore,
+                        score.qualityScore,
+                        score.sourceConfidence,
+                        score.finalScore,
+                        score.candidate.syncKind
+                    )
+                )
+            }
+        }
+
+        val selected = LyricsProviderResolver.selectBest(track, candidates)
+        val providerSetComplete = if (PetitLyricsClient.isConfigured) {
+            lrcAttempt.candidate != null && petitAttempt?.candidate != null &&
+                !lrcAttempt.timedOut && !petitAttempt.timedOut
+        } else {
+            !lrcAttempt.timedOut
+        }
+        val refreshAfterMs = if (providerSetComplete) {
+            LyricsCache.DEFAULT_REFRESH_AFTER_MS
+        } else {
+            PROVISIONAL_CACHE_REFRESH_MS
+        }
+
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                PROVIDER_RESOLVER_TAG,
+                selected?.let {
+                    "selected=${it.candidate.provider} final=${"%.3f".format(it.finalScore)} " +
+                        "kind=${it.candidate.syncKind} cacheRefresh=${refreshAfterMs}ms"
+                } ?: "selected=none"
+            )
+        }
+
+        FetchDecision(
+            candidate = selected?.candidate,
+            refreshAfterMs = refreshAfterMs
+        )
     }
 
-    private fun fetchFromLrcLib(track: TrackInfo): FetchResult? {
+    private suspend fun fetchProviderWithBudget(
+        provider: String,
+        block: () -> LyricsProviderCandidate?
+    ): ProviderAttempt {
+        val started = SystemClock.elapsedRealtime()
+        return try {
+            val candidate = withTimeout(PROVIDER_BUDGET_MS) {
+                runInterruptible(Dispatchers.IO) { block() }
+            }
+            ProviderAttempt(
+                provider = provider,
+                candidate = candidate,
+                timedOut = false,
+                elapsedMs = SystemClock.elapsedRealtime() - started
+            )
+        } catch (e: TimeoutCancellationException) {
+            ProviderAttempt(
+                provider = provider,
+                candidate = null,
+                timedOut = true,
+                elapsedMs = SystemClock.elapsedRealtime() - started
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            ProviderAttempt(
+                provider = provider,
+                candidate = null,
+                timedOut = false,
+                elapsedMs = SystemClock.elapsedRealtime() - started
+            )
+        }
+    }
+
+    private fun fetchFromPetitLyrics(track: TrackInfo): LyricsProviderCandidate? {
+        if (!PetitLyricsClient.isConfigured) return null
+
+        val result = try {
+            PetitLyricsClient.getSyncedLyrics(
+                album = track.album,
+                artist = track.artist,
+                title = track.title
+            )
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
+        if (!hasRealText) return null
+
+        val syncKind = when (result.lyricsType) {
+            3 -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+            else -> LyricsProviderCandidate.SyncKind.LINE_SYNC
+        }
+
+        return LyricsProviderCandidate(
+            provider = "PetitLyrics",
+            title = result.matchedTitle.ifBlank { track.title },
+            artist = result.matchedArtist,
+            album = result.matchedAlbum,
+            durationSec = result.matchedDurationSec,
+            lines = result.lines,
+            status = LyricsStatus.FOUND,
+            source = "PetitLyrics · Synced",
+            syncKind = syncKind
+        )
+    }
+
+    private fun fetchFromLrcLib(track: TrackInfo): LyricsProviderCandidate? {
         val durationSec = if (track.durationMs > 0) (track.durationMs / 1000).toInt() else 0
 
         val result = try {
@@ -348,14 +506,38 @@ class MediaTracker private constructor(context: Context) {
         if (result.syncedLyrics != null) {
             val lines = LrcParser.parse(result.syncedLyrics)
             val hasRealText = lines.any { it.text != "♪" && it.text.isNotBlank() }
-            if (hasRealText) return FetchResult(lines, LyricsStatus.FOUND, "LRCLIB · Synced")
+            if (hasRealText) {
+                return LyricsProviderCandidate(
+                    provider = "LRCLIB",
+                    title = result.trackName.orEmpty().ifBlank { track.title },
+                    artist = result.artistName.orEmpty(),
+                    album = result.albumName.orEmpty(),
+                    durationSec = result.duration,
+                    lines = lines,
+                    status = LyricsStatus.FOUND,
+                    source = "LRCLIB · Synced",
+                    syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
+                )
+            }
         }
 
         if (result.plainLyrics != null) {
             val lines = result.plainLyrics.lines()
                 .filter { it.isNotBlank() }
                 .map { text -> LyricLine(0L, text) }
-            if (lines.isNotEmpty()) return FetchResult(lines, LyricsStatus.PLAIN_ONLY, "LRCLIB · Plain")
+            if (lines.isNotEmpty()) {
+                return LyricsProviderCandidate(
+                    provider = "LRCLIB",
+                    title = result.trackName.orEmpty().ifBlank { track.title },
+                    artist = result.artistName.orEmpty(),
+                    album = result.albumName.orEmpty(),
+                    durationSec = result.duration,
+                    lines = lines,
+                    status = LyricsStatus.PLAIN_ONLY,
+                    source = "LRCLIB · Plain",
+                    syncKind = LyricsProviderCandidate.SyncKind.PLAIN
+                )
+            }
         }
 
         return null
@@ -380,7 +562,9 @@ class MediaTracker private constructor(context: Context) {
     }
 
     companion object {
-        private const val CACHE_REFRESH_MS = 7L * 24 * 60 * 60 * 1000
+        private const val PROVIDER_BUDGET_MS = 5_000L
+        private const val PROVISIONAL_CACHE_REFRESH_MS = 15L * 60 * 1000
+        private const val PROVIDER_RESOLVER_TAG = "ProviderResolver"
 
         @Volatile
         private var instance: MediaTracker? = null

@@ -13,6 +13,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Keep provider identifiers out of ordinary PR/main artifacts. They are
+      # injected only into version-tagged release builds.
+      PETITLYRICS_USER_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_USER_ID || '' }}
+      PETITLYRICS_APP_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_APP_NAME || '' }}
+      PETITLYRICS_PKG_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_PKG_NAME || '' }}
+      PETITLYRICS_CLIENT_APP_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_CLIENT_APP_ID || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +35,35 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Build debug APK
-        run: gradle assembleDebug
+      - name: Validate PetitLyrics release configuration
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          missing=()
+          for name in \
+            PETITLYRICS_USER_ID \
+            PETITLYRICS_APP_NAME \
+            PETITLYRICS_PKG_NAME \
+            PETITLYRICS_CLIENT_APP_ID; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required PetitLyrics release secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: gradle testDebugUnitTest
+
+      - name: Build APK
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            gradle assembleRelease
+          else
+            gradle assembleDebug
+          fi
 
       - name: Get version name
         id: version
@@ -37,20 +71,26 @@ jobs:
           VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "name=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Rename APK
+      - name: Prepare APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk \
-             app/build/outputs/apk/debug/auto-lyrics-${{ steps.version.outputs.name }}.apk
+          mkdir -p app/build/outputs/distribution
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            SOURCE=app/build/outputs/apk/release/app-release.apk
+          else
+            SOURCE=app/build/outputs/apk/debug/app-debug.apk
+          fi
+          cp "$SOURCE" \
+             "app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: auto-lyrics-${{ steps.version.outputs.name }}
-          path: app/build/outputs/apk/debug/auto-lyrics-${{ steps.version.outputs.name }}.apk
+          path: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/auto-lyrics-${{ steps.version.outputs.name }}.apk
+          files: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
           generate_release_notes: true
