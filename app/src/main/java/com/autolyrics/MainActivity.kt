@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scrollView: ScrollView
     private lateinit var delayBar: LinearLayout
     private lateinit var tvDelay: TextView
+    private lateinit var btnPhoneSyncReset: Button
     private lateinit var divider: View
     private lateinit var fontSettingsPanel: LinearLayout
     private lateinit var tvFontSize: TextView
@@ -114,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         scrollView = findViewById(R.id.scroll_lyrics)
         delayBar = findViewById(R.id.layout_delay)
         tvDelay = findViewById(R.id.tv_delay)
+        btnPhoneSyncReset = findViewById(R.id.btn_delay_reset)
         divider = findViewById(R.id.divider)
 
         ivAlbumArt.clipToOutline = true
@@ -126,13 +128,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btn_delay_minus).setOnClickListener {
-            mediaTracker.adjustOffset(-100)
+            mediaTracker.adjustOffset(-PHONE_SYNC_STEP_MS)
         }
         findViewById<Button>(R.id.btn_delay_plus).setOnClickListener {
-            mediaTracker.adjustOffset(100)
+            mediaTracker.adjustOffset(PHONE_SYNC_STEP_MS)
         }
-        findViewById<Button>(R.id.btn_delay_reset).setOnClickListener {
+        btnPhoneSyncReset.setOnClickListener {
+            val previousOffset = mediaTracker.state.value.offsetMs
+            if (previousOffset == 0L) return@setOnClickListener
+
             mediaTracker.resetOffset()
+
+            Snackbar.make(rootLayout, "Phone Sync reset", Snackbar.LENGTH_LONG)
+                .setAction("↩ Undo") {
+                    mediaTracker.setOffset(previousOffset)
+                }
+                .show()
         }
 
         fontSettingsPanel = findViewById(R.id.layout_font_settings)
@@ -241,6 +252,14 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_quick_minus_half).setOnClickListener {
             mediaTracker.adjustOffset(-500)
+            showSyncStatus("Offset: ${formatOffset(mediaTracker.state.value.offsetMs)}")
+        }
+        findViewById<Button>(R.id.btn_quick_minus_tenth).setOnClickListener {
+            mediaTracker.adjustOffset(-100)
+            showSyncStatus("Offset: ${formatOffset(mediaTracker.state.value.offsetMs)}")
+        }
+        findViewById<Button>(R.id.btn_quick_plus_tenth).setOnClickListener {
+            mediaTracker.adjustOffset(100)
             showSyncStatus("Offset: ${formatOffset(mediaTracker.state.value.offsetMs)}")
         }
         findViewById<Button>(R.id.btn_quick_plus_half).setOnClickListener {
@@ -398,6 +417,10 @@ class MainActivity : AppCompatActivity() {
             else -> ""
         }
         tvDelay.text = "Phone Sync: ${sign}${offsetMs}ms"
+
+        val canReset = offsetMs != 0L
+        btnPhoneSyncReset.isEnabled = canReset
+        btnPhoneSyncReset.alpha = if (canReset) 1f else 0.35f
     }
 
     private fun renderSyncedLyrics(state: LyricsState) {
@@ -655,7 +678,7 @@ class MainActivity : AppCompatActivity() {
             val targetLine = state.lines.getOrNull(tapSyncTargetLineIndex)
             if (targetLine != null && targetLine.timeMs > 0) {
                 val rawPos = getCurrentRawPositionMs()
-                val offset = rawPos - targetLine.timeMs
+                val offset = targetLine.timeMs - rawPos
                 tapSyncOffsets.add(offset)
             }
 
@@ -763,6 +786,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val AA_OFFSET_PREF_KEY = "aa_offset_ms"
         private const val AA_SYNC_STEP_MS = 50L
+        private const val PHONE_SYNC_STEP_MS = 50L
         private val DEFAULT_BG = Color.parseColor("#121212")
         private val DEFAULT_APP_BAR = Color.parseColor("#1E1E2E")
         private val DEFAULT_DELAY_BAR = Color.parseColor("#1A1A2A")
