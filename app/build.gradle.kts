@@ -18,7 +18,12 @@ fun loadDotEnv(file: java.io.File): Map<String, String> {
         }
 }
 
-val dotEnv = loadDotEnv(rootProject.file(".env"))
+// Local configuration precedence:
+//   process environment > .env > .env.example
+// .env.example is used only when .env itself does not exist.
+val localEnvFile = rootProject.file(".env").takeIf { it.exists() }
+    ?: rootProject.file(".env.example")
+val dotEnv = loadDotEnv(localEnvFile)
 
 fun providerConfig(name: String): String {
     return System.getenv(name)?.takeIf { it.isNotBlank() }
