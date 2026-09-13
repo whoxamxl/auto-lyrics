@@ -142,6 +142,48 @@ class LyricsProviderResolverTest {
     }
 
     @Test
+    fun compositeMediaArtistAcceptsExactContributorForExactTitle() {
+        val track = TrackInfo(
+            title = "Under the Sea",
+            artist = "Alan Menken, Howard Ashman, Samuel E. Wright, Disney",
+            album = "The Little Mermaid",
+            durationMs = 195_000L
+        )
+        val petit = candidate(
+            provider = "PetitLyrics",
+            title = "Under the Sea",
+            artist = "Samuel E. Wright",
+            album = "The Little Mermaid",
+            durationSec = null,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC
+        )
+
+        val metadata = LyricsProviderResolver.metadataScore(track, petit)
+
+        assertTrue(metadata != null && metadata > 0.95)
+    }
+
+    @Test
+    fun compositeMediaArtistStillRejectsUnrelatedArtist() {
+        val track = TrackInfo(
+            title = "Under the Sea",
+            artist = "Alan Menken, Howard Ashman, Samuel E. Wright, Disney",
+            album = "",
+            durationMs = 195_000L
+        )
+        val unrelated = candidate(
+            provider = "PetitLyrics",
+            title = "Under the Sea",
+            artist = "Completely Different Singer",
+            album = "",
+            durationSec = null,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC
+        )
+
+        assertNull(LyricsProviderResolver.metadataScore(track, unrelated))
+    }
+
+    @Test
     fun westernTrackKeepsLrcLibTiePreference() {
         val track = TrackInfo("Example Song", "Example Artist", "Example Album", 200_000L)
         val lrcLib = candidate(
