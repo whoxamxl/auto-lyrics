@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.View
@@ -20,6 +21,7 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 class TranslationStatusView @JvmOverloads constructor(
     context: Context,
@@ -58,6 +60,9 @@ class TranslationStatusView @JvmOverloads constructor(
     }
 
     private var observationJob: Job? = null
+    private val elapsedRefreshRunnable = Runnable {
+        render(LyricsTranslator.uiState.value)
+    }
 
     private val preferenceListener =
         SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -115,6 +120,7 @@ class TranslationStatusView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(elapsedRefreshRunnable)
         observationJob?.cancel()
         observationJob = null
         prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
@@ -122,6 +128,8 @@ class TranslationStatusView @JvmOverloads constructor(
     }
 
     private fun render(state: LyricsTranslator.UiState) {
+        removeCallbacks(elapsedRefreshRunnable)
+
         if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) {
             progressBar.hide()
             visibility = View.GONE
@@ -144,13 +152,27 @@ class TranslationStatusView @JvmOverloads constructor(
             else -> false
         }
 
+        if (state.phase == LyricsTranslator.Phase.READY ||
+            state.phase == LyricsTranslator.Phase.DOWNLOAD_FAILED ||
+            state.phase == LyricsTranslator.Phase.DOWNLOAD_TIMED_OUT
+        ) {
+            state.sourceLanguage?.let { downloadStartedAtByLanguage.remove(it) }
+        }
+
         val text = when (state.phase) {
             LyricsTranslator.Phase.IDLE -> null
             LyricsTranslator.Phase.DETECTING_LANGUAGE -> "Detecting language…"
             LyricsTranslator.Phase.CHECKING_MODEL ->
                 "Checking ${language ?: "translation"} → English model…"
-            LyricsTranslator.Phase.DOWNLOADING_MODEL ->
-                "Downloading ${language ?: "translation"} → English model…"
+            LyricsTranslator.Phase.DOWNLOADING_MODEL -> {
+                val key = state.sourceLanguage ?: UNKNOWN_LANGUAGE_KEY
+                val startedAt = downloadStartedAtByLanguage.getOrPut(key) {
+                    SystemClock.elapsedRealtime()
+                }
+                val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                "Downloading ${language ?: "translation"} → English model…\n" +
+                    "Elapsed ${formatElapsed(elapsedMs)}"
+            }
             LyricsTranslator.Phase.TRANSLATING ->
                 "Translating ${language ?: "lyrics"} → English…"
             LyricsTranslator.Phase.READY ->
@@ -189,10 +211,17 @@ class TranslationStatusView @JvmOverloads constructor(
             progressBar.hide()
         }
         retryButton.visibility = if (canRetry) View.VISIBLE else View.GONE
+
+        if (state.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL) {
+            postDelayed(elapsedRefreshRunnable, ELAPSED_REFRESH_MS)
+        }
     }
 
     private fun retryTranslation() {
         retryButton.isEnabled = false
+        LyricsTranslator.uiState.value.sourceLanguage?.let {
+            downloadStartedAtByLanguage.remove(it)
+        }
 
         // Clear the explicit per-language retry gate first. Toggling the preference
         // then asks MediaTracker to re-run translation for the currently loaded track.
@@ -214,6 +243,17 @@ class TranslationStatusView @JvmOverloads constructor(
             ?: code.uppercase(Locale.ENGLISH)
     }
 
+    private fun formatElapsed(elapsedMs: Long): String {
+        val totalSeconds = elapsedMs / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return if (minutes > 0) {
+            "${minutes}m ${seconds.toString().padStart(2, '0')}s"
+        } else {
+            "${seconds}s"
+        }
+    }
+
     private fun buildFailureText(prefix: String, error: String?): String {
         val detail = error?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_ERROR_LENGTH)
         return if (detail == null) prefix else "$prefix · $detail"
@@ -227,8 +267,11 @@ class TranslationStatusView @JvmOverloads constructor(
         private const val PREFS_NAME = "auto_lyrics_prefs"
         private const val TRANSLATION_ENABLED_KEY = "translation_enabled"
         private const val RETRY_TOGGLE_DELAY_MS = 150L
+        private const val ELAPSED_REFRESH_MS = 1_000L
         private const val MAX_ERROR_LENGTH = 90
         private const val VIEW_TAG = "translation_status_view"
+        private const val UNKNOWN_LANGUAGE_KEY = "__unknown__"
+        private val downloadStartedAtByLanguage = ConcurrentHashMap<String, Long>()
 
         fun install(activity: AppCompatActivity) {
             val translationSwitch = activity.findViewById<View>(R.id.switch_translation) ?: return
