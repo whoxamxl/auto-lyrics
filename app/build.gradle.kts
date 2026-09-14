@@ -114,8 +114,9 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
 
-    // Android Auto - MediaBrowserService
+    // Android Auto - MediaBrowserService + projection connection state
     implementation("androidx.media:media:1.7.0")
+    implementation("androidx.car.app:app:1.7.0")
 
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
