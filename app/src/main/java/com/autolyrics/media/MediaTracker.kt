@@ -514,7 +514,7 @@ class MediaTracker private constructor(context: Context) {
 
     private fun fetchFromMusixmatch(track: TrackInfo): LyricsProviderCandidate? {
         val result = try {
-            MusixmatchClient.getLyrics(track)
+            MusixmatchClient.getLyrics(track, prefs)
         } catch (_: Exception) {
             null
         } ?: return null
@@ -522,10 +522,9 @@ class MediaTracker private constructor(context: Context) {
         val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
         if (!hasRealText) return null
 
-        val status = if (result.isRichSync) LyricsStatus.FOUND else LyricsStatus.PLAIN_ONLY
         val syncKind = when {
-            !result.isRichSync -> LyricsProviderCandidate.SyncKind.PLAIN
-            result.lines.any { it.words.isNotEmpty() } -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+            result.isRichSync && result.lines.any { it.words.isNotEmpty() } ->
+                LyricsProviderCandidate.SyncKind.WORD_SYNC
             else -> LyricsProviderCandidate.SyncKind.LINE_SYNC
         }
 
@@ -536,9 +535,10 @@ class MediaTracker private constructor(context: Context) {
             album = result.matchedAlbum,
             durationSec = result.matchedDurationSec,
             lines = result.lines,
-            status = status,
-            source = if (result.isRichSync) "Musixmatch · RichSync" else "Musixmatch · Plain",
-            syncKind = syncKind
+            status = LyricsStatus.FOUND,
+            source = if (result.isRichSync) "Musixmatch · RichSync" else "Musixmatch · Line",
+            syncKind = syncKind,
+            artistQueryCorroborated = result.artistQueryCorroborated
         )
     }
 
