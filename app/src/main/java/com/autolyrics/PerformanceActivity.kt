@@ -27,6 +27,7 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
+import com.autolyrics.util.LyricWordLayout
 import kotlinx.coroutines.launch
 
 class PerformanceActivity : AppCompatActivity() {
@@ -232,7 +233,9 @@ class PerformanceActivity : AppCompatActivity() {
         accentBg: Int
     ): SpannableStringBuilder {
         val ssb = SpannableStringBuilder()
+        val layout = LyricWordLayout.layout(line)
         line.words.forEachIndexed { wi, word ->
+            ssb.append(layout.prefixes.getOrElse(wi) { "" })
             val start = ssb.length
             ssb.append(word.text)
             val end = ssb.length
@@ -243,9 +246,8 @@ class PerformanceActivity : AppCompatActivity() {
                 ssb.setSpan(ForegroundColorSpan(accentColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 ssb.setSpan(BackgroundColorSpan(accentBg), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-
-            if (wi < line.words.size - 1) ssb.append(" ")
         }
+        ssb.append(layout.suffix)
         return ssb
     }
 
