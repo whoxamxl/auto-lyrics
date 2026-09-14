@@ -14,6 +14,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -93,8 +94,15 @@ class PerformanceActivity : AppCompatActivity() {
         }
 
         if (state.source.isNotBlank()) {
-            sourceLabel.text = if (state.detectedLanguage != null) {
-                "${state.source} · ${state.detectedLanguage}→en"
+            val sourceLanguage = TranslationLanguages.normalizeLanguageTag(state.detectedLanguage)
+            val targetLanguage = TranslationLanguages.normalizeTargetLanguage(
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(
+                    TranslationLanguages.TARGET_LANGUAGE_PREF_KEY,
+                    TranslationLanguages.DEFAULT_TARGET_LANGUAGE
+                )
+            )
+            sourceLabel.text = if (sourceLanguage != null) {
+                "${state.source} · $sourceLanguage→$targetLanguage"
             } else {
                 state.source
             }
@@ -125,7 +133,7 @@ class PerformanceActivity : AppCompatActivity() {
                     durationMs = state.track?.durationMs ?: 0L,
                     linesId = lyricsIdentity
                 )
-                if (!plain && state.currentIndex >= 0) {
+                if (!plain) {
                     lyricsView.setActiveLine(state.currentIndex)
                 }
             }
@@ -148,6 +156,7 @@ class PerformanceActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val PREFS_NAME = "auto_lyrics_prefs"
         private val DEFAULT_ACCENT = Color.parseColor("#FFD54F")
         private val DEFAULT_DIM = Color.parseColor("#66FFFFFF")
     }
