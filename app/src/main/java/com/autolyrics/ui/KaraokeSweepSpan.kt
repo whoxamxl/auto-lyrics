@@ -57,6 +57,11 @@ internal object PhoneKaraokeSweep {
         )
     }
 
+    fun isAnimating(line: LyricLine, positionMs: Long): Boolean {
+        val segment = segmentAtPosition(line, positionMs) ?: return false
+        return positionMs >= segment.startTimeMs && positionMs < segment.endTimeMs
+    }
+
     private fun sameDisplayRange(
         line: LyricLine,
         tokenIndex: Int,
