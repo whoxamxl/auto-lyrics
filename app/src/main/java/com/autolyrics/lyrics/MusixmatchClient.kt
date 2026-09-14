@@ -3,6 +3,7 @@ package com.autolyrics.lyrics
 import android.content.SharedPreferences
 import android.util.Log
 import com.autolyrics.BuildConfig
+import com.autolyrics.media.SpotifyTrackIdentity
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
@@ -71,6 +72,7 @@ object MusixmatchClient {
     internal data class TrackCandidate(
         val trackId: Long?,
         val commonTrackId: Long?,
+        val spotifyTrackId: String,
         val title: String,
         val artist: String,
         val album: String,
@@ -99,8 +101,17 @@ object MusixmatchClient {
         val macro = fetchMacro(track, prefs) ?: return null
         val match = parseMacroResponse(macro.toString()) ?: return null
         val candidate = match.candidate
+        val requestedSpotifyTrackId = SpotifyTrackIdentity.trackId(track)
 
         logMatchDiagnostics(track, candidate)
+
+        if (!spotifyIdentityCompatible(requestedSpotifyTrackId, candidate.spotifyTrackId)) {
+            debugLog(
+                "mobile macro match rejected: spotify id mismatch " +
+                    "requested=$requestedSpotifyTrackId matched=${candidate.spotifyTrackId}"
+            )
+            return null
+        }
 
         if (candidate.instrumental) {
             debugLog("mobile macro match rejected: instrumental")
@@ -162,10 +173,7 @@ object MusixmatchClient {
         return null
     }
 
-    private fun fetchMacro(
-        track: TrackInfo,
-        prefs: SharedPreferences?
-    ): JsonObject? {
+    internal fun buildMacroParams(track: TrackInfo): LinkedHashMap<String, String> {
         val params = linkedMapOf(
             "namespace" to "lyrics_richsynched",
             "optional_calls" to "track.richsync",
@@ -179,10 +187,31 @@ object MusixmatchClient {
         if (track.durationMs > 0L) {
             params["q_duration"] = (track.durationMs / 1000.0).roundToLong().toString()
         }
+        SpotifyTrackIdentity.trackId(track)?.let { spotifyTrackId ->
+            params["track_spotify_id"] = spotifyTrackId
+        }
+        return params
+    }
+
+    internal fun spotifyIdentityCompatible(
+        requestedSpotifyTrackId: String?,
+        matchedSpotifyTrackId: String
+    ): Boolean {
+        return requestedSpotifyTrackId == null ||
+            matchedSpotifyTrackId.isBlank() ||
+            matchedSpotifyTrackId == requestedSpotifyTrackId
+    }
+
+    private fun fetchMacro(
+        track: TrackInfo,
+        prefs: SharedPreferences?
+    ): JsonObject? {
+        val params = buildMacroParams(track)
 
         debugLog(
             "mobile macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
-                "q_album='${params["q_album"].orEmpty()}' q_duration='${params["q_duration"].orEmpty()}'"
+                "q_album='${params["q_album"].orEmpty()}' q_duration='${params["q_duration"].orEmpty()}' " +
+                "spotify_id='${params["track_spotify_id"].orEmpty()}'"
         )
 
         return authenticatedRequest("macro.subtitles.get", params, prefs)
@@ -356,6 +385,7 @@ object MusixmatchClient {
         val candidate = TrackCandidate(
             trackId = track.longOrNull("track_id"),
             commonTrackId = track.longOrNull("commontrack_id"),
+            spotifyTrackId = track.string("track_spotify_id"),
             title = title,
             artist = track.string("artist_name"),
             album = track.string("album_name"),
@@ -516,6 +546,7 @@ object MusixmatchClient {
         )
         debugLog(
             "mobile macro match id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
+                "spotify=${candidate.spotifyTrackId.ifBlank { "-" }} " +
                 "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
                 "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
                 "instrumental=${candidate.instrumental}"

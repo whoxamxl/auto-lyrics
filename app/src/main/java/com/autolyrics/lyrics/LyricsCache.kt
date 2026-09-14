@@ -1,6 +1,7 @@
 package com.autolyrics.lyrics
 
 import android.content.Context
+import com.autolyrics.media.SpotifyTrackIdentity
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
@@ -151,14 +152,18 @@ class LyricsCache(context: Context) {
             "unknown"
         }
 
-        val key = listOf(
+        val keyParts = mutableListOf(
             "v13",
             variant.name.lowercase(Locale.ROOT),
             normalizeKeyPart(track.title),
             normalizeKeyPart(track.artist),
             normalizeKeyPart(track.album),
             durationSec
-        ).joinToString("|")
+        )
+        SpotifyTrackIdentity.trackId(track)?.let { spotifyTrackId ->
+            keyParts += "spotify:$spotifyTrackId"
+        }
+        val key = keyParts.joinToString("|")
 
         val hash = key.hashCode().toUInt().toString(16)
         return File(cacheDir, "$hash.json")
