@@ -19,12 +19,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 /**
- * Musixmatch provider using the current anonymous-token web/desktop flow.
+ * Musixmatch provider using the anonymous desktop-token flow.
  *
  * Flow:
  *  1. token.get -> anonymous user_token, cached in SharedPreferences.
- *  2. macro.subtitles.get -> metadata match + line-synced LRC subtitle.
- *  3. track.richsync.get -> optional per-word timing when has_richsync=1.
+ *  2. macro.subtitles.get -> matched metadata + richsync/subtitle macro calls.
+ *  3. track.richsync.get -> fallback RichSync request if the macro omitted it.
  *
  * This is an unofficial endpoint. Failures remain isolated to this provider.
  */
@@ -37,7 +37,7 @@ object MusixmatchClient {
 
     private const val TOKEN_PREF_KEY = "musixmatch_user_token"
     private const val TOKEN_TIME_PREF_KEY = "musixmatch_user_token_time_ms"
-    private const val TOKEN_TTL_MS = 6L * 60L * 60L * 1000L
+    private const val TOKEN_TTL_MS = 10L * 60L * 1000L
 
     private const val USER_AGENT =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
@@ -80,7 +80,8 @@ object MusixmatchClient {
 
     internal data class MacroMatch(
         val candidate: TrackCandidate,
-        val subtitleBody: String
+        val subtitleBody: String,
+        val richSyncResponseJson: String? = null
     )
 
     private data class HttpJsonResponse(
@@ -115,8 +116,19 @@ object MusixmatchClient {
             return null
         }
 
-        if (candidate.hasRichSync && candidate.commonTrackId != null) {
-            val richSync = fetchRichSync(candidate, prefs)
+        if (candidate.hasRichSync) {
+            val inlineRichSync = match.richSyncResponseJson
+                ?.let(::parseRichSyncResponse)
+                .orEmpty()
+            val richSync = if (inlineRichSync.isNotEmpty()) {
+                debugLog("using RichSync embedded in macro response")
+                inlineRichSync
+            } else if (candidate.commonTrackId != null) {
+                fetchRichSync(candidate, prefs)
+            } else {
+                emptyList()
+            }
+
             if (richSync.isNotEmpty()) {
                 debugLog("richsync accepted lines=${richSync.size}")
                 return MusixmatchResult(
@@ -154,19 +166,21 @@ object MusixmatchClient {
         prefs: SharedPreferences?
     ): JsonObject? {
         val params = linkedMapOf(
-            "namespace" to "lyrics_richsynched",
+            "namespace" to "lyrics_richsynced",
+            "optional_calls" to "track.richsync",
             "subtitle_format" to "lrc",
-            "q_track" to track.title,
             "q_artist" to track.artist,
-            "q_album" to track.album
+            "q_track" to track.title
         )
         if (track.durationMs > 0L) {
-            params["q_duration"] = (track.durationMs / 1000.0).roundToLong().toString()
+            params["f_subtitle_length"] = (track.durationMs / 1000.0).roundToLong().toString()
+            params["f_subtitle_length_max_deviation"] = "3"
         }
 
         debugLog(
             "macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
-                "q_album='${track.album}' q_duration='${params["q_duration"].orEmpty()}'"
+                "f_subtitle_length='${params["f_subtitle_length"].orEmpty()}' " +
+                "max_deviation='${params["f_subtitle_length_max_deviation"].orEmpty()}'"
         )
 
         return authenticatedRequest("macro.subtitles.get", params, prefs)
@@ -234,7 +248,7 @@ object MusixmatchClient {
             debugLog(if (force) "token.get refresh" else "token.get")
             val response = request(
                 endpoint = "token.get",
-                params = linkedMapOf("t" to now.toString())
+                params = linkedMapOf("user_language" to "en")
             )
             val token = parseTokenResponse(response.json?.toString().orEmpty())
             if (!token.isNullOrBlank()) {
@@ -249,7 +263,7 @@ object MusixmatchClient {
             }
 
             // If refresh was rate-limited but an older token exists, give it one
-            // last chance. authenticatedRequest() will refresh again only on 401.
+            // last chance. authenticatedRequest() will reject it if it is invalid.
             return cachedToken
         }
     }
@@ -261,8 +275,10 @@ object MusixmatchClient {
         val url = buildUrl(endpoint, params)
         val request = Request.Builder()
             .url(url)
+            .header("Accept", "application/json")
+            .header("Accept-Language", "en")
+            .header("Cookie", "AWSELBCORS=0; AWSELB=0")
             .header("User-Agent", USER_AGENT)
-            .header("Cookie", "x-mxm-token-guid=")
             .build()
 
         return try {
@@ -286,7 +302,8 @@ object MusixmatchClient {
     ): String {
         val all = linkedMapOf(
             "app_id" to APP_ID,
-            "format" to "json"
+            "format" to "json",
+            "t" to System.currentTimeMillis().toString()
         )
         all.putAll(params)
 
@@ -310,10 +327,16 @@ object MusixmatchClient {
         val root = parseJsonObject(json) ?: return null
         if (apiStatus(root) != 200) return null
 
-        val matcherCall = deepFind(root, "matcher.track.get")
-        val track = deepFind(matcherCall ?: root, "track")
-            ?.takeIf { it.isJsonObject }
-            ?.asJsonObject
+        val macroCalls = root.getAsJsonObject("message")
+            ?.getAsJsonObject("body")
+            ?.getAsJsonObject("macro_calls")
+            ?: return null
+
+        val matcherCall = macroCalls.getAsJsonObject("matcher.track.get") ?: return null
+        if (apiStatus(matcherCall) != 200) return null
+        val track = matcherCall.getAsJsonObject("message")
+            ?.getAsJsonObject("body")
+            ?.getAsJsonObject("track")
             ?: return null
 
         val title = track.string("track_name")
@@ -330,11 +353,28 @@ object MusixmatchClient {
             instrumental = track.intOrNull("instrumental") == 1
         )
 
-        val subtitleBody = deepFind(root, "subtitle_body")
-            ?.asStringOrNull()
-            .orEmpty()
+        val subtitleCall = macroCalls.getAsJsonObject("track.subtitles.get")
+        val subtitleBody = if (apiStatus(subtitleCall) == 200) {
+            subtitleCall
+                ?.getAsJsonObject("message")
+                ?.getAsJsonObject("body")
+                ?.getAsJsonArray("subtitle_list")
+                ?.firstOrNull()
+                ?.takeIf { it.isJsonObject }
+                ?.asJsonObject
+                ?.getAsJsonObject("subtitle")
+                ?.string("subtitle_body")
+                .orEmpty()
+        } else {
+            ""
+        }
 
-        return MacroMatch(candidate, subtitleBody)
+        val richSyncCall = macroCalls.getAsJsonObject("track.richsync.get")
+        val richSyncResponseJson = richSyncCall
+            ?.takeIf { apiStatus(it) == 200 }
+            ?.toString()
+
+        return MacroMatch(candidate, subtitleBody, richSyncResponseJson)
     }
 
     internal fun parseSubtitleBody(subtitleBody: String): List<LyricLine> {
