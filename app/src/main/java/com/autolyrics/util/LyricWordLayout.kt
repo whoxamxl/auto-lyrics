@@ -2,6 +2,7 @@ package com.autolyrics.util
 
 import com.autolyrics.model.LyricLine
 import java.text.BreakIterator
+import java.text.Normalizer
 import java.util.Locale
 
 /**
@@ -100,14 +101,13 @@ object LyricWordLayout {
      */
     internal fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): DisplayRange? {
         val ranges = lexicalRanges(line.text)
-        if (ranges.isEmpty()) return null
+        if (ranges.isEmpty() || activeTokenIndex !in line.words.indices) return null
 
-        val tokenSpans = locateTokens(line)
-        if (tokenSpans == null) {
-            return fallbackDisplayRange(line, activeTokenIndex, ranges)
+        val tokenSpans = locateTokensBestEffort(line)
+        val token = tokenSpans[activeTokenIndex]
+        if (token == null) {
+            return fallbackDisplayRange(line, activeTokenIndex, ranges, tokenSpans)
         }
-
-        val token = tokenSpans.getOrNull(activeTokenIndex) ?: return null
 
         ranges.firstOrNull { range ->
             token.start < range.end && token.end > range.start
@@ -122,43 +122,87 @@ object LyricWordLayout {
         )
     }
 
-    private fun locateTokens(line: LyricLine): List<TokenSpan>? {
-        val spans = ArrayList<TokenSpan>(line.words.size)
+    private fun locateTokensBestEffort(line: LyricLine): List<TokenSpan?> {
+        val spans = MutableList<TokenSpan?>(line.words.size) { null }
         var cursor = 0
 
-        for (word in line.words) {
-            if (word.text.isEmpty()) return null
-            val index = line.text.indexOf(word.text, startIndex = cursor)
-            if (index < 0) return null
-            spans += TokenSpan(index, index + word.text.length)
-            cursor = index + word.text.length
+        line.words.forEachIndexed { index, word ->
+            val span = findTokenSpan(line.text, word.text, cursor) ?: return@forEachIndexed
+            spans[index] = span
+            cursor = span.end
         }
 
         return spans
     }
 
+    private fun findTokenSpan(text: String, token: String, startIndex: Int): TokenSpan? {
+        if (token.isEmpty() || startIndex >= text.length) return null
+
+        val exactIndex = text.indexOf(token, startIndex = startIndex)
+        if (exactIndex >= 0) {
+            return TokenSpan(exactIndex, exactIndex + token.length)
+        }
+
+        val caseInsensitiveIndex = text.indexOf(token, startIndex = startIndex, ignoreCase = true)
+        if (caseInsensitiveIndex >= 0) {
+            return TokenSpan(caseInsensitiveIndex, caseInsensitiveIndex + token.length)
+        }
+
+        val normalizedToken = normalizeForAlignment(token)
+        for (candidateStart in startIndex until text.length) {
+            val maxEnd = minOf(
+                text.length,
+                candidateStart + token.length + NORMALIZATION_SLACK_CHARS
+            )
+            for (candidateEnd in (candidateStart + 1)..maxEnd) {
+                if (normalizeForAlignment(text.substring(candidateStart, candidateEnd)) == normalizedToken) {
+                    return TokenSpan(candidateStart, candidateEnd)
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun normalizeForAlignment(text: String): String =
+        Normalizer.normalize(text, Normalizer.Form.NFC).lowercase(Locale.ROOT)
+
     private fun fallbackDisplayRange(
         line: LyricLine,
         activeTokenIndex: Int,
-        ranges: List<DisplayRange>
+        ranges: List<DisplayRange>,
+        tokenSpans: List<TokenSpan?>
     ): DisplayRange? {
         if (activeTokenIndex !in line.words.indices || ranges.isEmpty()) return null
         if (line.words.size == 1) {
             return DisplayRange(ranges.first().start, ranges.last().end)
         }
 
-        // If provider token strings cannot be aligned verbatim (case, punctuation,
-        // or Unicode-normalization differences), estimate each token's position
-        // from cumulative token text length. This keeps fragments of the same word
-        // together more reliably than mapping only by token index.
-        val tokenLengths = line.words.map { it.text.length.coerceAtLeast(1) }
+        val previousIndex = (activeTokenIndex - 1 downTo 0)
+            .firstOrNull { tokenSpans[it] != null }
+        val nextIndex = (activeTokenIndex + 1..line.words.lastIndex)
+            .firstOrNull { tokenSpans[it] != null }
+        val blockStartIndex = (previousIndex ?: -1) + 1
+        val blockEndIndex = (nextIndex ?: line.words.size) - 1
+        val intervalStart = tokenSpans.getOrNull(previousIndex ?: -1)?.end
+            ?: ranges.first().start
+        val intervalEnd = tokenSpans.getOrNull(nextIndex ?: tokenSpans.size)?.start
+            ?: ranges.last().end
+
+        // Only the unaligned block is estimated. Successfully aligned neighbors
+        // remain anchors, so a single case/punctuation/normalization mismatch does
+        // not redistribute the surrounding syllable timing across later words.
+        val tokenLengths = (blockStartIndex..blockEndIndex).map { index ->
+            line.words[index].text.length.coerceAtLeast(1)
+        }
         val totalLength = tokenLengths.sum().coerceAtLeast(1)
-        val consumedBefore = tokenLengths.take(activeTokenIndex).sum()
-        val tokenMidpoint = consumedBefore + tokenLengths[activeTokenIndex] / 2f
+        val activeOffset = activeTokenIndex - blockStartIndex
+        val consumedBefore = tokenLengths.take(activeOffset).sum()
+        val tokenMidpoint = consumedBefore + tokenLengths[activeOffset] / 2f
         val fraction = (tokenMidpoint / totalLength).coerceIn(0f, 1f)
-        val visibleStart = ranges.first().start.toFloat()
-        val visibleEnd = ranges.last().end.toFloat()
-        val target = visibleStart + (visibleEnd - visibleStart) * fraction
+        val start = intervalStart.toFloat()
+        val end = intervalEnd.coerceAtLeast(intervalStart).toFloat()
+        val target = start + (end - start) * fraction
 
         return ranges.minWithOrNull(
             compareBy<DisplayRange> { pointDistance(target, it) }
@@ -232,4 +276,6 @@ object LyricWordLayout {
             suffix = ""
         )
     }
+
+    private const val NORMALIZATION_SLACK_CHARS = 4
 }
