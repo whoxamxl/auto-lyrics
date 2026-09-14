@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.Gravity
@@ -177,6 +179,7 @@ class TranslationStatusView @JvmOverloads constructor(
             LyricsTranslator.Phase.DETECTING_LANGUAGE,
             LyricsTranslator.Phase.CHECKING_MODEL,
             LyricsTranslator.Phase.DOWNLOADING_MODEL,
+            LyricsTranslator.Phase.WAITING_FOR_SYSTEM,
             LyricsTranslator.Phase.TRANSLATING -> true
             else -> false
         }
@@ -195,7 +198,8 @@ class TranslationStatusView @JvmOverloads constructor(
             state.sourceLanguage?.let { downloadStartedAtByLanguage.remove(it) }
         }
 
-        val elapsedMs = if (state.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL) {
+        val modelOperation = isModelOperationPhase(state.phase)
+        val elapsedMs = if (modelOperation) {
             currentDownloadElapsedMs(state.sourceLanguage)
         } else {
             null
@@ -209,6 +213,9 @@ class TranslationStatusView @JvmOverloads constructor(
             LyricsTranslator.Phase.DOWNLOADING_MODEL ->
                 "Downloading ${language ?: "translation"} → English model…\n" +
                     "Elapsed ${formatElapsed(elapsedMs ?: 0L)}"
+            LyricsTranslator.Phase.WAITING_FOR_SYSTEM ->
+                "Waiting to download ${language ?: "translation"} → English model…\n" +
+                    "System thermal limit · Elapsed ${formatElapsed(elapsedMs ?: 0L)}"
             LyricsTranslator.Phase.TRANSLATING ->
                 "Translating ${language ?: "lyrics"} → English…"
             LyricsTranslator.Phase.READY ->
@@ -249,7 +256,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
         retryButton.visibility = if (canRetry) View.VISIBLE else View.GONE
 
-        if (state.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL) {
+        if (modelOperation) {
             if (BuildConfig.DEBUG && state.sourceLanguage != null) {
                 refreshDebugDiagnostics(state.sourceLanguage, elapsedMs ?: 0L)
             }
@@ -283,11 +290,12 @@ class TranslationStatusView @JvmOverloads constructor(
 
         debugDiagnosticsJob = activity.lifecycleScope.launch(Dispatchers.IO) {
             val info = queryDownloadManager(sourceLanguage)
-            val debug = buildDebugText(info, elapsedMs)
+            val thermalStatus = currentThermalStatus()
+            val debug = buildDebugText(info, elapsedMs, thermalStatus)
             withContext(Dispatchers.Main) {
                 val current = LyricsTranslator.uiState.value
                 if (isAttachedToWindow &&
-                    current.phase == LyricsTranslator.Phase.DOWNLOADING_MODEL &&
+                    isModelOperationPhase(current.phase) &&
                     current.sourceLanguage == sourceLanguage
                 ) {
                     debugText.text = debug
@@ -400,7 +408,11 @@ class TranslationStatusView @JvmOverloads constructor(
         }
     }
 
-    private fun buildDebugText(info: DownloadManagerDebugInfo, elapsedMs: Long): String {
+    private fun buildDebugText(
+        info: DownloadManagerDebugInfo,
+        elapsedMs: Long,
+        thermalStatus: Int?
+    ): String {
         val downloadLine = when {
             info.error != null -> "DownloadManager: ${info.error}"
             info.matchedFile == null ->
@@ -416,8 +428,36 @@ class TranslationStatusView @JvmOverloads constructor(
             append("ML Kit task: pending\n")
             append("Model available: false\n")
             append("Elapsed: ${formatElapsed(elapsedMs)}\n")
+            append("Thermal: ${thermalStatusName(thermalStatus)}\n")
             append(downloadLine)
         }
+    }
+
+    private fun currentThermalStatus(): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            powerManager?.currentThermalStatus
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun thermalStatusName(status: Int?): String = when (status) {
+        PowerManager.THERMAL_STATUS_NONE -> "None (0)"
+        PowerManager.THERMAL_STATUS_LIGHT -> "Light (1)"
+        PowerManager.THERMAL_STATUS_MODERATE -> "Moderate (2)"
+        PowerManager.THERMAL_STATUS_SEVERE -> "Severe (3)"
+        PowerManager.THERMAL_STATUS_CRITICAL -> "Critical (4)"
+        PowerManager.THERMAL_STATUS_EMERGENCY -> "Emergency (5)"
+        PowerManager.THERMAL_STATUS_SHUTDOWN -> "Shutdown (6)"
+        null -> "Unavailable"
+        else -> "status=$status"
+    }
+
+    private fun isModelOperationPhase(phase: LyricsTranslator.Phase): Boolean {
+        return phase == LyricsTranslator.Phase.DOWNLOADING_MODEL ||
+            phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM
     }
 
     private fun downloadStatusName(status: Int?): String = when (status) {
