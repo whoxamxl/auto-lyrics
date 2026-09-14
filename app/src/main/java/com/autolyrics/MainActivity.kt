@@ -535,7 +535,7 @@ class MainActivity : AppCompatActivity() {
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
 
-                var completedEnd = 0
+                var completedEnd = if (line.words.isEmpty()) line.text.length else 0
                 if (line.words.isNotEmpty() && state.currentWordIndex in line.words.indices) {
                     val displayRange = LyricWordLayout.displayRangeForToken(
                         line,
