@@ -211,7 +211,9 @@ When `has_richsync=1`, Auto Lyrics prefers `track.richsync.get`. RichSync line o
 word timestamp = ts + o
 ```
 
-The resulting timestamps are stored in `LyricWord` and persist through `LyricsCache`.
+The resulting timestamps are stored in `LyricWord` and persist through `LyricsCache` when word chunks are exposed.
+
+**Current renderer limitation:** the phone/Performance/Android Auto renderers insert spaces between `LyricWord` items. To avoid corrupting scripts whose RichSync chunks are naturally adjacent, `MusixmatchClient` currently suppresses word chunks for lines whose text contains no whitespace. Those lines retain exact text and line timing but temporarily behave as LINE_SYNC. This is a renderer limitation, not missing Musixmatch timing data.
 
 If RichSync is absent or unusable, `track.subtitles.get` LRC is parsed as LINE_SYNC. Both are `LyricsStatus.FOUND` because both are synchronized; only the timing granularity differs.
 
@@ -285,7 +287,7 @@ normalized album
 rounded duration in seconds
 ```
 
-A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus each `LyricWord(timeMs, text)`, so a cached Musixmatch RichSync result remains word-synchronized after restart/reload.
+A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus each `LyricWord(timeMs, text)`, so a cached Musixmatch RichSync result remains word-synchronized after restart/reload for lines where word chunks are exposed.
 
 Per-entry `refreshAfterMs` controls background refresh:
 
@@ -391,7 +393,7 @@ Provider/matching regression cases should continue to cover:
 - A failed matcher call cannot cause unrelated subtitle/richsync data to be accepted.
 - Embedded Musixmatch RichSync is parsed before line subtitle fallback.
 - RichSync uses `ts + o` for word timing.
-- Japanese/no-space RichSync text is preserved without artificial display spaces.
+- Japanese/no-space RichSync retains exact line text while the current renderer limitation suppresses per-word chunks.
 - Synchronized candidates outrank plain candidates.
 
 Manual DHU regression pass after Android Auto UI changes:
@@ -404,7 +406,7 @@ Manual DHU regression pass after Android Auto UI changes:
 6. More shows provider/details without affecting timing.
 7. Now-playing subtitle marks the current lyric with `▶`.
 8. Plain lyrics still advance correctly.
-9. WORD_SYNC highlighting does not inject spaces into scripts whose RichSync chunks are naturally adjacent.
+9. WORD_SYNC highlighting does not inject spaces into scripts whose RichSync chunks are naturally adjacent once renderer support is enabled.
 
 ## Key files
 
