@@ -6,11 +6,13 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import com.autolyrics.auto.LyricsBrowserService
+import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.media.MediaTracker
 
 class AutoLyricsApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        LyricsTranslator.init(this)
         MediaTracker.init(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
