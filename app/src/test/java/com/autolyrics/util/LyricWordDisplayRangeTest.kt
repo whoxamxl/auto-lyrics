@@ -70,6 +70,27 @@ class LyricWordDisplayRangeTest {
     }
 
     @Test
+    fun fragmentedMismatchedTokensStayOnTheirReadableWord() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(
+                LyricWord(1_000L, "HE"),
+                LyricWord(1_150L, "LLO"),
+                LyricWord(1_500L, "WORLD")
+            )
+        )
+
+        val hello = LyricWordLayout.DisplayRange(0, 5)
+        assertEquals(hello, LyricWordLayout.displayRangeForToken(line, 0))
+        assertEquals(hello, LyricWordLayout.displayRangeForToken(line, 1))
+        assertEquals(
+            LyricWordLayout.DisplayRange(6, 11),
+            LyricWordLayout.displayRangeForToken(line, 2)
+        )
+    }
+
+    @Test
     fun singleMismatchedTokenFallsBackToWholeVisibleLine() {
         val line = LyricLine(
             timeMs = 1_000L,
