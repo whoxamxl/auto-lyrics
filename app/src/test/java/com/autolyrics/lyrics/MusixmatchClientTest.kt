@@ -225,7 +225,7 @@ class MusixmatchClientTest {
     }
 
     @Test
-    fun japaneseRichSyncKeepsExactLineTextWithoutArtificialWordSpaces() {
+    fun japaneseRichSyncKeepsExactLineTextAndWordTiming() {
         val richSyncBody = """[{"ts":2.0,"te":5.0,"x":"君を忘れない","l":[{"c":"君を","o":0.0},{"c":"忘れない","o":0.8}]}]"""
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
@@ -242,6 +242,10 @@ class MusixmatchClientTest {
 
         assertEquals(1, lines.size)
         assertEquals("君を忘れない", lines[0].text)
-        assertTrue(lines[0].words.isEmpty())
+        assertEquals(2, lines[0].words.size)
+        assertEquals("君を", lines[0].words[0].text)
+        assertEquals(2_000L, lines[0].words[0].timeMs)
+        assertEquals("忘れない", lines[0].words[1].text)
+        assertEquals(2_800L, lines[0].words[1].timeMs)
     }
 }

@@ -411,15 +411,7 @@ object MusixmatchClient {
                 val startSec = line.doubleOrNull("ts") ?: return@mapNotNull null
                 val text = line.string("x").ifBlank { "♪" }
                 val startMs = secondsToMs(startSec)
-
-                // MainActivity currently inserts a separator between LyricWord
-                // items. For no-space languages keep exact line text and expose
-                // line timing until the renderer supports chunk-preserving joins.
-                val words = if (text.any { it.isWhitespace() }) {
-                    parseRichSyncWords(line, startSec)
-                } else {
-                    emptyList()
-                }
+                val words = parseRichSyncWords(line, startSec)
 
                 LyricLine(
                     timeMs = startMs,

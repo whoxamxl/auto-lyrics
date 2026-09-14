@@ -39,6 +39,7 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.AlbumColors
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
+import com.autolyrics.util.LyricWordLayout
 import com.autolyrics.util.SyncCalibration
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
@@ -519,7 +520,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
+                val layout = LyricWordLayout.layout(line)
                 line.words.forEachIndexed { wi, word ->
+                    ssb.append(layout.prefixes.getOrElse(wi) { "" })
                     val wordStart = ssb.length
                     ssb.append(word.text)
                     val wordEnd = ssb.length
@@ -541,9 +544,8 @@ class MainActivity : AppCompatActivity() {
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                         )
                     }
-
-                    if (wi < line.words.size - 1) ssb.append(" ")
                 }
+                ssb.append(layout.suffix)
                 ssb.setSpan(
                     StyleSpan(Typeface.BOLD),
                     lineStart, ssb.length,

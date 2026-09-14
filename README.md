@@ -11,6 +11,7 @@ Auto Lyrics is an Android app that follows the active media session and displays
 - **Now-playing lyric line** — the Android Auto now-playing card also carries the current lyric line.
 - **Multi-provider resolution** — LRCLIB, Musixmatch, and PetitLyrics can be queried in parallel and compared using metadata match, lyric quality, and source confidence.
 - **Musixmatch RichSync** — when available, Musixmatch word-level timing is exposed as karaoke/word sync; line-synchronized subtitles are used as fallback.
+- **Script-aware word rendering** — timed lyric chunks preserve the spacing of the provider's original line, so English, Japanese, and mixed-script RichSync can share the same WORD_SYNC path without artificial spaces.
 - **Synced and plain fallback** — synchronized lyrics are preferred; LRCLIB plain text remains a last-resort fallback.
 - **Robust metadata matching** — handles recording/version qualifiers, romanized-vs-native-script artist names, and multi-contributor metadata such as `Alan Menken, Howard Ashman, Samuel E. Wright, Disney`.
 - **Works with normal media-session players** — Spotify, YouTube Music, Apple Music, Poweramp, and other apps that expose usable Android media metadata.
@@ -181,6 +182,8 @@ Important behavior:
 - one token refresh/retry is allowed after an authentication rejection,
 - the macro's explicit `matcher.track.get` result is locally validated before any lyrics are accepted,
 - RichSync is preferred when usable,
+- RichSync chunks retain their timestamps even when the source line has no spaces,
+- renderers reconstruct separators from the original line text instead of inserting spaces between every timed chunk,
 - line-synchronized subtitles remain a synchronized fallback,
 - provider/network failure is isolated and does not prevent LRCLIB/PetitLyrics from completing.
 
@@ -205,10 +208,9 @@ adb logcat -s Musixmatch:D ProviderResolver:D PetitLyrics:D
 
 - Lyrics availability depends on the upstream providers; not every recording has usable synchronized lyrics.
 - Musixmatch and PetitLyrics integrations use unofficial/internal API surfaces and can change independently of Auto Lyrics.
-- **Current renderer limitation:** Musixmatch RichSync lines without whitespace (common in Japanese) keep their exact line text/timing but suppress `LyricWord` chunks to avoid the UI inserting artificial spaces. Those lines therefore behave as LINE_SYNC until the renderer becomes chunk-spacing-aware.
 - Media-session metadata quality varies by player. Auto Lyrics includes heuristics for common metadata problems, but unusual formats can still miss or mismatch.
 - Audio-output latency can differ between the phone speaker, Bluetooth, and Android Auto. Use the existing phone/global or AA-specific offset controls when an output path has a stable device-specific delay; Auto Lyrics does not apply a fixed provider-wide compensation without evidence that the timing source itself is systematically biased.
-- Android Auto karaoke text currently uses a small future-word look-ahead to bridge browse refresh intervals. This can make AA word highlighting appear slightly early even when provider timestamps are correct; it does not affect phone/Performance word selection.
+- Android Auto WORD_SYNC highlights the current timestamped word only. Browse-tree updates remain throttled, so visual updates can be slightly coarser than the phone/Performance UI without intentionally advancing into future words.
 - PetitLyrics client identifiers embedded in a distributed Android APK are extractable by design; do not use values that rely on client-side secrecy.
 - Sideloaded Android Auto media apps generally require Android Auto developer settings to be enabled.
 
