@@ -18,6 +18,7 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
+import com.autolyrics.util.LyricWordLayout
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 
@@ -84,8 +85,6 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val TRANSLATION_SUBTITLE_PREFIX = "\u2003\u2002\u2004"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
-        private const val BROWSE_KARAOKE_WINDOW_MS = 600L
-        private const val SUBTITLE_KARAOKE_WINDOW_MS = 300L
         private const val SESSION_REFRESH_MS = 1500L
         private const val PLAIN_LOOP_DELAY_MS = 2000L
     }
@@ -274,7 +273,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 val line = state.lines[i]
                 val isCurrent = i == idx
                 val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
-                    buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
+                    buildKaraokeText(line, i, posMs)
                 } else {
                     line.text.ifBlank { "♪" }
                 }
@@ -441,7 +440,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             val prefix = linePrefix(isCurrent)
 
             val text = if (isCurrent && aaKaraokeEnabled && line.words.isNotEmpty()) {
-                buildKaraokeText(line, i, posMs, BROWSE_KARAOKE_WINDOW_MS)
+                buildKaraokeText(line, i, posMs)
             } else {
                 line.text.ifBlank { "♪" }
             }
@@ -535,7 +534,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         return idx
     }
 
-    private fun buildKaraokeText(line: LyricLine, lineIdx: Int, posMs: Long, windowMs: Long): String {
+    private fun buildKaraokeText(line: LyricLine, lineIdx: Int, posMs: Long): String {
         val words = line.words
         if (words.isEmpty()) return line.text
 
@@ -551,26 +550,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             return lastKaraokeText!!
         }
 
-        var endIdx = currentIdx
-        for (i in (currentIdx + 1) until words.size) {
-            if (words[i].timeMs <= posMs + windowMs) endIdx = i
-            else break
-        }
-
-        if (sameLine) {
-            endIdx = maxOf(endIdx, lastKaraokeWordIdx)
-        }
-
         lastKaraokeLineIdx = lineIdx
         lastKaraokeWordIdx = currentIdx
-        val sb = StringBuilder()
-        for (i in words.indices) {
-            if (i == currentIdx) sb.append("【")
-            sb.append(words[i].text)
-            if (i == endIdx) sb.append("】")
-            if (i < words.size - 1) sb.append(" ")
-        }
-        lastKaraokeText = sb.toString()
+        lastKaraokeText = LyricWordLayout.karaokeText(line, currentIdx)
         return lastKaraokeText!!
     }
 
@@ -588,7 +570,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             val line = state.lines.getOrNull(lineIdx)
             if (line != null) {
                 val original = if (aaKaraokeEnabled && line.words.isNotEmpty()) {
-                    buildKaraokeText(line, lineIdx, posMs, SUBTITLE_KARAOKE_WINDOW_MS)
+                    buildKaraokeText(line, lineIdx, posMs)
                 } else {
                     line.text
                 }
@@ -798,7 +780,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val windowChanged = win.start != displayedWindowStart || win.end != displayedWindowEnd
         val lineChanged = win.currentIdx != displayedCurrentIdx
         val karaokeActive = aaKaraokeEnabled && state.status == LyricsStatus.FOUND
-            && state.lines.getOrNull(state.currentIndex)?.words?.isNotEmpty() == true
+            && state.lines.getOrNull(win.currentIdx)?.words?.isNotEmpty() == true
 
         if (!windowChanged && !lineChanged && !statusChanged && !sourceChanged &&
             !detectedLanguageChanged && !translationAvailabilityChanged && !karaokeActive
