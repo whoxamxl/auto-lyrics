@@ -118,6 +118,7 @@ object MusixmatchClient {
             }
         }
 
+        logCandidateDiagnostics(track, discovered.values.toList())
         val ranked = rankCandidates(track, discovered.values.toList())
         debugLog("search candidates=${discovered.size}, acceptable=${ranked.size}")
 
@@ -324,21 +325,7 @@ object MusixmatchClient {
         candidates: List<TrackCandidate>
     ): List<RankedCandidate> {
         return candidates.mapIndexedNotNull { index, candidate ->
-            val normalized = LyricsProviderCandidate(
-                provider = "Musixmatch",
-                title = candidate.title,
-                artist = candidate.artist,
-                album = candidate.album,
-                durationSec = candidate.durationSec,
-                lines = listOf(LyricLine(0L, "candidate")),
-                status = LyricsStatus.FOUND,
-                source = "Musixmatch · candidate",
-                syncKind = if (candidate.hasRichSync) {
-                    LyricsProviderCandidate.SyncKind.WORD_SYNC
-                } else {
-                    LyricsProviderCandidate.SyncKind.PLAIN
-                }
-            )
+            val normalized = normalizedCandidate(candidate)
             val score = LyricsProviderResolver.metadataScore(track, normalized)
                 ?: return@mapIndexedNotNull null
             if (score < MIN_PROVIDER_METADATA_SCORE) return@mapIndexedNotNull null
@@ -348,6 +335,93 @@ object MusixmatchClient {
                 .thenByDescending { it.candidate.hasRichSync }
                 .thenBy { it.index }
         )
+    }
+
+    private fun normalizedCandidate(candidate: TrackCandidate): LyricsProviderCandidate {
+        return LyricsProviderCandidate(
+            provider = "Musixmatch",
+            title = candidate.title,
+            artist = candidate.artist,
+            album = candidate.album,
+            durationSec = candidate.durationSec,
+            lines = listOf(LyricLine(0L, "candidate")),
+            status = LyricsStatus.FOUND,
+            source = "Musixmatch · candidate",
+            syncKind = if (candidate.hasRichSync) {
+                LyricsProviderCandidate.SyncKind.WORD_SYNC
+            } else {
+                LyricsProviderCandidate.SyncKind.PLAIN
+            }
+        )
+    }
+
+    private fun logCandidateDiagnostics(
+        track: TrackInfo,
+        candidates: List<TrackCandidate>
+    ) {
+        if (!BuildConfig.DEBUG) return
+
+        val targetDurationSec = track.durationMs
+            .takeIf { it > 0L }
+            ?.div(1000.0)
+        debugLog(
+            "target title='${track.title}' artist='${track.artist}' album='${track.album}' " +
+                "duration=${scoreText(targetDurationSec)}s"
+        )
+
+        candidates.forEachIndexed { index, candidate ->
+            val titleCompatible = LrcLibClient.versionsCompatible(track.title, candidate.title)
+            val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
+            val artistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
+                LrcLibClient.artistSimilarity(
+                    left = track.artist,
+                    right = candidate.artist,
+                    allowContributorComponents = titleScore >= 0.95
+                )
+            } else {
+                null
+            }
+            val albumScore = if (track.album.isNotBlank() && candidate.album.isNotBlank()) {
+                LrcLibClient.stringSimilarity(track.album, candidate.album)
+            } else {
+                null
+            }
+            val durationScore = if (targetDurationSec != null && candidate.durationSec != null) {
+                LrcLibClient.durationSimilarity(targetDurationSec.toInt(), candidate.durationSec)
+            } else {
+                null
+            }
+            val metadataScore = LyricsProviderResolver.metadataScore(
+                track,
+                normalizedCandidate(candidate)
+            )
+
+            val verdict = when {
+                !titleCompatible -> "REJECT version-mismatch"
+                titleScore < 0.60 -> "REJECT title<0.60"
+                durationScore != null && durationScore < 0.0 -> "REJECT duration-mismatch"
+                metadataScore == null -> "REJECT resolver-gate"
+                metadataScore < MIN_PROVIDER_METADATA_SCORE -> "REJECT metadata<0.70"
+                else -> "ACCEPT"
+            }
+
+            debugLog(
+                "candidate[$index] id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
+                    "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
+                    "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
+                    "lyrics=${candidate.hasLyrics}"
+            )
+            debugLog(
+                "candidate[$index] scores compatible=$titleCompatible " +
+                    "title=${scoreText(titleScore)} artist=${scoreText(artistScore)} " +
+                    "album=${scoreText(albumScore)} duration=${scoreText(durationScore)} " +
+                    "metadata=${scoreText(metadataScore)} $verdict"
+            )
+        }
+    }
+
+    private fun scoreText(value: Double?): String {
+        return value?.let { String.format(Locale.US, "%.3f", it) } ?: "n/a"
     }
 
     private fun makeRequest(
