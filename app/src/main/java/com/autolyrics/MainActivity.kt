@@ -507,6 +507,7 @@ class MainActivity : AppCompatActivity() {
         val dimColor = colors?.textDim ?: DEFAULT_DIM
 
         state.lines.forEachIndexed { i, line ->
+            val isPastLine = state.currentIndex >= 0 && i < state.currentIndex
             val isCurrentLine = i == state.currentIndex
             val isFutureLine = state.currentIndex < 0 || i > state.currentIndex
             val lineStart = ssb.length
@@ -519,34 +520,57 @@ class MainActivity : AppCompatActivity() {
 
             val lyricStart = ssb.length
             ssb.append(line.text)
+            val lyricEnd = ssb.length
 
-            if (isCurrentLine) {
+            if (isPastLine) {
+                ssb.setSpan(
+                    ForegroundColorSpan(highlightColor),
+                    lyricStart, lyricEnd,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            } else if (isCurrentLine) {
                 ssb.setSpan(
                     StyleSpan(Typeface.BOLD),
-                    lineStart, ssb.length,
+                    lineStart, lyricEnd,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
 
+                var completedEnd = 0
                 if (line.words.isNotEmpty() && state.currentWordIndex in line.words.indices) {
                     val displayRange = LyricWordLayout.displayRangeForToken(
                         line,
                         state.currentWordIndex
                     )
                     if (displayRange != null) {
-                        ssb.setSpan(
-                            ForegroundColorSpan(highlightColor),
-                            lyricStart + displayRange.start,
-                            lyricStart + displayRange.end,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
+                        completedEnd = if (state.currentWordIndex == line.words.lastIndex) {
+                            line.text.length
+                        } else {
+                            displayRange.end
+                        }
                     }
                 }
-            }
 
-            if (isFutureLine) {
+                if (completedEnd > 0) {
+                    ssb.setSpan(
+                        ForegroundColorSpan(highlightColor),
+                        lyricStart,
+                        lyricStart + completedEnd.coerceAtMost(line.text.length),
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+
+                val futureStart = lyricStart + completedEnd.coerceIn(0, line.text.length)
+                if (futureStart < lyricEnd) {
+                    ssb.setSpan(
+                        ForegroundColorSpan(dimColor),
+                        futureStart, lyricEnd,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+            } else if (isFutureLine) {
                 ssb.setSpan(
                     ForegroundColorSpan(dimColor),
-                    lineStart, ssb.length,
+                    lineStart, lyricEnd,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
