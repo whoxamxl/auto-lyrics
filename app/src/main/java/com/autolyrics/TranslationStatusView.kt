@@ -255,10 +255,7 @@ class TranslationStatusView @JvmOverloads constructor(
                 }
             }
 
-            LyricsTranslator.Phase.TRANSLATING -> {
-                showDeterminateProgress(100, animate = true)
-            }
-
+            LyricsTranslator.Phase.TRANSLATING -> showDeterminateProgress(100, animate = true)
             else -> hideProgress()
         }
 
