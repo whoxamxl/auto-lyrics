@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.SpannableStringBuilder
 import android.text.Spanned
-import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
@@ -189,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnSans = findViewById<Button>(R.id.btn_font_sans)
-        val btnSerif = findViewById<Button>(R.id.btn_font_serif)
+        val btnSerif = findViewById<Button>(R.id.btn_serif)
         val btnMono = findViewById<Button>(R.id.btn_font_mono)
         val btnCursive = findViewById<Button>(R.id.btn_font_cursive)
 
@@ -503,14 +502,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSyncedLyrics(state: LyricsState) {
         val ssb = SpannableStringBuilder()
-        val hasKaraoke = state.lines.any { it.words.isNotEmpty() }
         val colors = state.albumColors
         val highlightColor = colors?.vibrant ?: DEFAULT_HIGHLIGHT
-        val highlightBg = setAlpha(highlightColor, 0.2f)
         val dimColor = colors?.textDim ?: DEFAULT_DIM
 
         state.lines.forEachIndexed { i, line ->
             val isCurrentLine = i == state.currentIndex
+            val isFutureLine = state.currentIndex < 0 || i > state.currentIndex
             val lineStart = ssb.length
 
             if (isCurrentLine) {
@@ -519,50 +517,33 @@ class MainActivity : AppCompatActivity() {
                 ssb.append("    ")
             }
 
-            if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
-                val layout = LyricWordLayout.layout(line)
-                line.words.forEachIndexed { wi, word ->
-                    ssb.append(layout.prefixes.getOrElse(wi) { "" })
-                    val wordStart = ssb.length
-                    ssb.append(word.text)
-                    val wordEnd = ssb.length
+            val lyricStart = ssb.length
+            ssb.append(line.text)
 
-                    if (wi == state.currentWordIndex) {
-                        ssb.setSpan(
-                            StyleSpan(Typeface.BOLD),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            ForegroundColorSpan(highlightColor),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            BackgroundColorSpan(highlightBg),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    }
-                }
-                ssb.append(layout.suffix)
+            if (isCurrentLine) {
                 ssb.setSpan(
                     StyleSpan(Typeface.BOLD),
                     lineStart, ssb.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
-            } else {
-                ssb.append(line.text)
-                if (isCurrentLine) {
-                    ssb.setSpan(
-                        StyleSpan(Typeface.BOLD),
-                        lineStart, ssb.length,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+
+                if (line.words.isNotEmpty() && state.currentWordIndex in line.words.indices) {
+                    val displayRange = LyricWordLayout.displayRangeForToken(
+                        line,
+                        state.currentWordIndex
                     )
+                    if (displayRange != null) {
+                        ssb.setSpan(
+                            ForegroundColorSpan(highlightColor),
+                            lyricStart + displayRange.start,
+                            lyricStart + displayRange.end,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    }
                 }
             }
 
-            if (!isCurrentLine) {
+            if (isFutureLine) {
                 ssb.setSpan(
                     ForegroundColorSpan(dimColor),
                     lineStart, ssb.length,
@@ -924,10 +905,5 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIVIDER = Color.parseColor("#2A2A3A")
         private val DEFAULT_HIGHLIGHT = Color.parseColor("#FFD54F")
         private val DEFAULT_DIM = Color.parseColor("#99FFFFFF")
-
-        private fun setAlpha(color: Int, alpha: Float): Int {
-            val a = (alpha * 255).toInt().coerceIn(0, 255)
-            return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
-        }
     }
 }
