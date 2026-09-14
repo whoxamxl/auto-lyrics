@@ -15,12 +15,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # A normal tag push remains the standard release path. A main-branch commit
+      # named "Release vX.Y.Z" is also allowed to create the matching tag/release;
+      # this keeps the release operation atomic with the version bump.
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v')) }}
       # Keep provider identifiers out of ordinary PR/main artifacts. They are
-      # injected only into version-tagged release builds.
-      PETITLYRICS_USER_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_USER_ID || '' }}
-      PETITLYRICS_APP_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_APP_NAME || '' }}
-      PETITLYRICS_PKG_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_PKG_NAME || '' }}
-      PETITLYRICS_CLIENT_APP_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PETITLYRICS_CLIENT_APP_ID || '' }}
+      # injected only into release builds.
+      PETITLYRICS_USER_ID: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_USER_ID || '' }}
+      PETITLYRICS_APP_NAME: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_APP_NAME || '' }}
+      PETITLYRICS_PKG_NAME: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_PKG_NAME || '' }}
+      PETITLYRICS_CLIENT_APP_ID: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_CLIENT_APP_ID || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +40,27 @@ jobs:
         with:
           gradle-version: '8.4'
 
+      - name: Get version name
+        id: version
+        run: |
+          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release version
+        if: env.IS_RELEASE == 'true'
+        shell: bash
+        run: |
+          EXPECTED_TAG="v${{ steps.version.outputs.name }}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            ACTUAL_TAG="${GITHUB_REF#refs/tags/}"
+            if [[ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]]; then
+              echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
+              exit 1
+            fi
+          fi
+
       - name: Validate PetitLyrics release configuration
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.IS_RELEASE == 'true'
         shell: bash
         run: |
           missing=()
@@ -76,22 +99,16 @@ jobs:
 
       - name: Build APK
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$IS_RELEASE" == "true" ]]; then
             gradle assembleRelease
           else
             gradle assembleDebug
           fi
 
-      - name: Get version name
-        id: version
-        run: |
-          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Prepare APK
         run: |
           mkdir -p app/build/outputs/distribution
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$IS_RELEASE" == "true" ]]; then
             SOURCE=app/build/outputs/apk/release/app-release.apk
           else
             SOURCE=app/build/outputs/apk/debug/app-debug.apk
@@ -106,9 +123,12 @@ jobs:
           path: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
 
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ steps.version.outputs.name }}
           files: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
           generate_release_notes: true
 
