@@ -34,7 +34,7 @@ class TranslationStatusView @JvmOverloads constructor(
     attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
 
-    private data class DownloadManagerDebugInfo(
+    private data class DownloadManagerInfo(
         val expectedFiles: Set<String>,
         val matchedFile: String? = null,
         val status: Int? = null,
@@ -68,6 +68,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
     private val progressBar = LinearProgressIndicator(context).apply {
         isIndeterminate = true
+        max = 100
         setIndicatorColor(Color.parseColor("#BB86FC"))
         trackColor = Color.parseColor("#2A2A3E")
         trackThickness = dp(3)
@@ -83,8 +84,9 @@ class TranslationStatusView @JvmOverloads constructor(
     }
 
     private var observationJob: Job? = null
-    private var debugDiagnosticsJob: Job? = null
+    private var downloadStatusJob: Job? = null
     private var hostActivity: AppCompatActivity? = null
+    private var progressSourceLanguage: String? = null
 
     private val elapsedRefreshRunnable = Runnable {
         render(LyricsTranslator.uiState.value)
@@ -155,8 +157,8 @@ class TranslationStatusView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         removeCallbacks(elapsedRefreshRunnable)
-        debugDiagnosticsJob?.cancel()
-        debugDiagnosticsJob = null
+        downloadStatusJob?.cancel()
+        downloadStatusJob = null
         hostActivity = null
         observationJob?.cancel()
         observationJob = null
@@ -168,22 +170,13 @@ class TranslationStatusView @JvmOverloads constructor(
         removeCallbacks(elapsedRefreshRunnable)
 
         if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) {
-            progressBar.hide()
+            hideProgress()
             hideDebugDiagnostics()
             visibility = View.GONE
             return
         }
 
         val language = languageName(state.sourceLanguage)
-        val running = when (state.phase) {
-            LyricsTranslator.Phase.DETECTING_LANGUAGE,
-            LyricsTranslator.Phase.CHECKING_MODEL,
-            LyricsTranslator.Phase.DOWNLOADING_MODEL,
-            LyricsTranslator.Phase.WAITING_FOR_SYSTEM,
-            LyricsTranslator.Phase.TRANSLATING -> true
-            else -> false
-        }
-
         val canRetry = when (state.phase) {
             LyricsTranslator.Phase.DOWNLOAD_FAILED,
             LyricsTranslator.Phase.DOWNLOAD_TIMED_OUT,
@@ -233,7 +226,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
 
         if (text == null) {
-            progressBar.hide()
+            hideProgress()
             hideDebugDiagnostics()
             visibility = View.GONE
             return
@@ -248,18 +241,32 @@ class TranslationStatusView @JvmOverloads constructor(
                 Color.parseColor("#AAAACC")
             }
         )
-
-        if (running) {
-            progressBar.show()
-        } else {
-            progressBar.hide()
-        }
         retryButton.visibility = if (canRetry) View.VISIBLE else View.GONE
 
-        if (modelOperation) {
-            if (BuildConfig.DEBUG && state.sourceLanguage != null) {
-                refreshDebugDiagnostics(state.sourceLanguage, elapsedMs ?: 0L)
+        when (state.phase) {
+            LyricsTranslator.Phase.DETECTING_LANGUAGE,
+            LyricsTranslator.Phase.CHECKING_MODEL -> showIndeterminateProgress()
+
+            LyricsTranslator.Phase.DOWNLOADING_MODEL,
+            LyricsTranslator.Phase.WAITING_FOR_SYSTEM -> {
+                if (progressSourceLanguage != state.sourceLanguage || progressBar.visibility != View.VISIBLE) {
+                    progressSourceLanguage = state.sourceLanguage
+                    showIndeterminateProgress()
+                }
             }
+
+            LyricsTranslator.Phase.TRANSLATING -> {
+                // The model is now available to ML Kit. A completed network transfer can
+                // sit at 99% while ML Kit installs/verifies it; reaching TRANSLATING is
+                // the authoritative signal that model preparation finished.
+                showDeterminateProgress(100, animate = true)
+            }
+
+            else -> hideProgress()
+        }
+
+        if (modelOperation && state.sourceLanguage != null) {
+            refreshDownloadStatus(state.sourceLanguage, state.phase)
             postDelayed(elapsedRefreshRunnable, ELAPSED_REFRESH_MS)
         } else {
             hideDebugDiagnostics()
@@ -271,11 +278,8 @@ class TranslationStatusView @JvmOverloads constructor(
         LyricsTranslator.uiState.value.sourceLanguage?.let {
             downloadStartedAtByLanguage.remove(it)
         }
+        progressSourceLanguage = null
 
-        // Clear the explicit per-language retry gate first. Toggling the preference
-        // then asks MediaTracker to re-run translation for the currently loaded track.
-        // prepareManualRetry() also restarts a failed model monitor independently, so
-        // Retry still works if the current track is English or has no lyrics.
         LyricsTranslator.prepareManualRetry()
         prefs.edit().putBoolean(TRANSLATION_ENABLED_KEY, false).apply()
         postDelayed({
@@ -284,46 +288,92 @@ class TranslationStatusView @JvmOverloads constructor(
         }, RETRY_TOGGLE_DELAY_MS)
     }
 
-    private fun refreshDebugDiagnostics(sourceLanguage: String, elapsedMs: Long) {
-        if (!BuildConfig.DEBUG || debugDiagnosticsJob?.isActive == true) return
+    private fun refreshDownloadStatus(
+        sourceLanguage: String,
+        phase: LyricsTranslator.Phase
+    ) {
+        if (downloadStatusJob?.isActive == true) return
         val activity = hostActivity ?: return
 
-        debugDiagnosticsJob = activity.lifecycleScope.launch(Dispatchers.IO) {
+        downloadStatusJob = activity.lifecycleScope.launch(Dispatchers.IO) {
             val info = queryDownloadManager(sourceLanguage)
             val thermalStatus = currentThermalStatus()
-            val debug = buildDebugText(info, elapsedMs, thermalStatus)
             withContext(Dispatchers.Main) {
                 val current = LyricsTranslator.uiState.value
-                if (isAttachedToWindow &&
-                    isModelOperationPhase(current.phase) &&
-                    current.sourceLanguage == sourceLanguage
+                if (!isAttachedToWindow ||
+                    !isModelOperationPhase(current.phase) ||
+                    current.sourceLanguage != sourceLanguage
                 ) {
-                    debugText.text = debug
+                    return@withContext
+                }
+
+                applyDownloadProgress(info)
+                if (BuildConfig.DEBUG) {
+                    debugText.text = buildDebugText(info, phase, thermalStatus)
                     debugText.visibility = View.VISIBLE
                 }
             }
         }
     }
 
+    private fun applyDownloadProgress(info: DownloadManagerInfo) {
+        val downloaded = info.bytesDownloaded ?: -1L
+        val total = info.totalBytes ?: -1L
+
+        if (downloaded > 0L && total > 0L) {
+            val transferPercent = ((downloaded.toDouble() / total.toDouble()) * 100.0)
+                .toInt()
+                .coerceIn(1, MODEL_TRANSFER_MAX_PERCENT)
+            showDeterminateProgress(transferPercent, animate = true)
+        } else {
+            showIndeterminateProgress()
+        }
+    }
+
+    private fun showIndeterminateProgress() {
+        if (progressBar.isIndeterminate && progressBar.visibility == View.VISIBLE) return
+        progressBar.visibility = View.INVISIBLE
+        progressBar.isIndeterminate = true
+        progressBar.visibility = View.VISIBLE
+    }
+
+    private fun showDeterminateProgress(percent: Int, animate: Boolean) {
+        val safePercent = percent.coerceIn(0, 100)
+        if (progressBar.isIndeterminate) {
+            progressBar.visibility = View.INVISIBLE
+            progressBar.isIndeterminate = false
+            progressBar.setProgressCompat(safePercent, false)
+            progressBar.visibility = View.VISIBLE
+        } else {
+            progressBar.visibility = View.VISIBLE
+            progressBar.setProgressCompat(safePercent, animate)
+        }
+    }
+
+    private fun hideProgress() {
+        progressBar.hide()
+        progressSourceLanguage = null
+    }
+
     private fun hideDebugDiagnostics() {
-        debugDiagnosticsJob?.cancel()
-        debugDiagnosticsJob = null
+        downloadStatusJob?.cancel()
+        downloadStatusJob = null
         debugText.visibility = View.GONE
     }
 
-    private fun queryDownloadManager(sourceLanguage: String): DownloadManagerDebugInfo {
+    private fun queryDownloadManager(sourceLanguage: String): DownloadManagerInfo {
         val expectedFiles = expectedModelFileNames(sourceLanguage)
         if (expectedFiles.isEmpty()) {
-            return DownloadManagerDebugInfo(
+            return DownloadManagerInfo(
                 expectedFiles = emptySet(),
-                error = "no filename candidates for '$sourceLanguage'"
+                error = "no filename candidates"
             )
         }
 
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-            ?: return DownloadManagerDebugInfo(
+            ?: return DownloadManagerInfo(
                 expectedFiles = expectedFiles,
-                error = "DownloadManager unavailable"
+                error = "Download progress unavailable"
             )
 
         return try {
@@ -347,7 +397,8 @@ class TranslationStatusView @JvmOverloads constructor(
                     val uriFile = uri.substringAfterLast('/').substringBefore('?').lowercase(Locale.US)
                     val titleFile = title.lowercase(Locale.US)
                     val matchedFile = expectedFiles.firstOrNull { candidate ->
-                        uriFile == candidate || titleFile == candidate ||
+                        uriFile == candidate ||
+                            titleFile == candidate ||
                             uri.lowercase(Locale.US).endsWith("/$candidate")
                     } ?: continue
 
@@ -360,7 +411,8 @@ class TranslationStatusView @JvmOverloads constructor(
                         bestStatus == DownloadManager.STATUS_RUNNING ||
                         bestStatus == DownloadManager.STATUS_PAUSED
 
-                    if (bestFile == null || (isActive && !bestIsActive) ||
+                    if (bestFile == null ||
+                        (isActive && !bestIsActive) ||
                         (isActive == bestIsActive && modified >= bestModified)
                     ) {
                         bestFile = matchedFile
@@ -371,7 +423,7 @@ class TranslationStatusView @JvmOverloads constructor(
                     }
                 }
 
-                DownloadManagerDebugInfo(
+                DownloadManagerInfo(
                     expectedFiles = expectedFiles,
                     matchedFile = bestFile,
                     status = bestStatus,
@@ -380,9 +432,9 @@ class TranslationStatusView @JvmOverloads constructor(
                 )
             }
         } catch (e: Exception) {
-            DownloadManagerDebugInfo(
+            DownloadManagerInfo(
                 expectedFiles = expectedFiles,
-                error = "${e.javaClass.simpleName}: ${e.localizedMessage ?: "query failed"}"
+                error = e.javaClass.simpleName
             )
         }
     }
@@ -394,7 +446,6 @@ class TranslationStatusView @JvmOverloads constructor(
         if (normalized.isBlank() || normalized == "en") return emptySet()
 
         val sourceCodes = when (normalized) {
-            // Some Android/ML Kit download URLs still use legacy Java language codes.
             "he" -> setOf("he", "iw")
             "id" -> setOf("id", "in")
             "yi" -> setOf("yi", "ji")
@@ -409,27 +460,35 @@ class TranslationStatusView @JvmOverloads constructor(
     }
 
     private fun buildDebugText(
-        info: DownloadManagerDebugInfo,
-        elapsedMs: Long,
+        info: DownloadManagerInfo,
+        phase: LyricsTranslator.Phase,
         thermalStatus: Int?
     ): String {
-        val downloadLine = when {
-            info.error != null -> "DownloadManager: ${info.error}"
-            info.matchedFile == null ->
-                "DownloadManager: no matching ${info.expectedFiles.joinToString(" / ")} row"
-            else -> {
-                val downloaded = formatBytes(info.bytesDownloaded)
-                val total = formatBytes(info.totalBytes)
-                "DownloadManager: $downloaded / $total · ${downloadStatusName(info.status)} · ${info.matchedFile}"
+        val downloaded = info.bytesDownloaded
+        val total = info.totalBytes
+
+        if (downloaded != null && downloaded >= 0L && total != null && total > 0L) {
+            val state = when {
+                downloaded >= total -> "Processing"
+                info.status == DownloadManager.STATUS_RUNNING -> "Downloading"
+                info.status == DownloadManager.STATUS_PAUSED -> "Paused"
+                phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM -> "Waiting"
+                else -> "Downloading"
             }
+            return "${formatBytes(downloaded)} / ${formatBytes(total)} · $state"
         }
 
-        return buildString {
-            append("ML Kit task: pending\n")
-            append("Model available: false\n")
-            append("Elapsed: ${formatElapsed(elapsedMs)}\n")
-            append("Thermal: ${thermalStatusName(thermalStatus)}\n")
-            append(downloadLine)
+        if (phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM) {
+            val thermal = compactThermalStatusName(thermalStatus)
+            return "0 B / ? · Waiting · Thermal: $thermal"
+        }
+
+        return when {
+            info.error != null -> "Download progress unavailable"
+            info.matchedFile == null -> "0 B / ? · Waiting for system"
+            info.status == DownloadManager.STATUS_FAILED -> "0 B / ? · Download failed"
+            info.status == DownloadManager.STATUS_PAUSED -> "0 B / ? · Paused"
+            else -> "0 B / ? · Waiting for system"
         }
     }
 
@@ -443,31 +502,21 @@ class TranslationStatusView @JvmOverloads constructor(
         }
     }
 
-    private fun thermalStatusName(status: Int?): String = when (status) {
-        PowerManager.THERMAL_STATUS_NONE -> "None (0)"
-        PowerManager.THERMAL_STATUS_LIGHT -> "Light (1)"
-        PowerManager.THERMAL_STATUS_MODERATE -> "Moderate (2)"
-        PowerManager.THERMAL_STATUS_SEVERE -> "Severe (3)"
-        PowerManager.THERMAL_STATUS_CRITICAL -> "Critical (4)"
-        PowerManager.THERMAL_STATUS_EMERGENCY -> "Emergency (5)"
-        PowerManager.THERMAL_STATUS_SHUTDOWN -> "Shutdown (6)"
+    private fun compactThermalStatusName(status: Int?): String = when (status) {
+        PowerManager.THERMAL_STATUS_NONE -> "None"
+        PowerManager.THERMAL_STATUS_LIGHT -> "Light"
+        PowerManager.THERMAL_STATUS_MODERATE -> "Moderate"
+        PowerManager.THERMAL_STATUS_SEVERE -> "Severe"
+        PowerManager.THERMAL_STATUS_CRITICAL -> "Critical"
+        PowerManager.THERMAL_STATUS_EMERGENCY -> "Emergency"
+        PowerManager.THERMAL_STATUS_SHUTDOWN -> "Shutdown"
         null -> "Unavailable"
-        else -> "status=$status"
+        else -> "$status"
     }
 
     private fun isModelOperationPhase(phase: LyricsTranslator.Phase): Boolean {
         return phase == LyricsTranslator.Phase.DOWNLOADING_MODEL ||
             phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM
-    }
-
-    private fun downloadStatusName(status: Int?): String = when (status) {
-        DownloadManager.STATUS_PENDING -> "pending"
-        DownloadManager.STATUS_RUNNING -> "running"
-        DownloadManager.STATUS_PAUSED -> "paused"
-        DownloadManager.STATUS_SUCCESSFUL -> "successful"
-        DownloadManager.STATUS_FAILED -> "failed"
-        null -> "unknown"
-        else -> "status=$status"
     }
 
     private fun formatBytes(bytes: Long?): String {
@@ -528,6 +577,7 @@ class TranslationStatusView @JvmOverloads constructor(
         private const val TRANSLATION_ENABLED_KEY = "translation_enabled"
         private const val RETRY_TOGGLE_DELAY_MS = 150L
         private const val ELAPSED_REFRESH_MS = 1_000L
+        private const val MODEL_TRANSFER_MAX_PERCENT = 99
         private const val MAX_ERROR_LENGTH = 90
         private const val VIEW_TAG = "translation_status_view"
         private const val UNKNOWN_LANGUAGE_KEY = "__unknown__"
