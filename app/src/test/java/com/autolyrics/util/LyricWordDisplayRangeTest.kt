@@ -70,6 +70,31 @@ class LyricWordDisplayRangeTest {
     }
 
     @Test
+    fun unevenCaseMismatchesUseActualLexicalPositions() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "extraordinary a b c d e",
+            words = listOf(
+                LyricWord(1_000L, "EXTRAORDINARY"),
+                LyricWord(1_500L, "A"),
+                LyricWord(1_600L, "B"),
+                LyricWord(1_700L, "C"),
+                LyricWord(1_800L, "D"),
+                LyricWord(1_900L, "E")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(14, 15),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(16, 17),
+            LyricWordLayout.displayRangeForToken(line, 2)
+        )
+    }
+
+    @Test
     fun fragmentedMismatchedTokensStayOnTheirReadableWord() {
         val line = LyricLine(
             timeMs = 1_000L,
