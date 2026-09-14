@@ -273,6 +273,11 @@ class PerformanceLyricsView @JvmOverloads constructor(
             targetLine.toFloat().coerceIn(0f, maxIndex)
         }
 
+        if (plainMode && abs(targetIndex - animIndex) > SNAP_JUMP_LINES) {
+            animIndex = targetIndex
+            animVelocity = 0f
+        }
+
         val stiffness = 120f
         val damping = 2f * DAMPING_RATIO * sqrt(stiffness)
         val substeps = ceil(dt / 0.008f).toInt().coerceIn(1, 8)
