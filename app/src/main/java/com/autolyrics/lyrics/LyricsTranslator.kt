@@ -1,5 +1,8 @@
 package com.autolyrics.lyrics
 
+import android.content.Context
+import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import com.autolyrics.model.LyricLine
@@ -39,6 +42,7 @@ object LyricsTranslator {
         DETECTING_LANGUAGE,
         CHECKING_MODEL,
         DOWNLOADING_MODEL,
+        WAITING_FOR_SYSTEM,
         TRANSLATING,
         READY,
         ALREADY_ENGLISH,
@@ -59,6 +63,9 @@ object LyricsTranslator {
     private const val MODEL_POLL_INTERVAL_MS = 2_000L
     private const val MODEL_CHECK_TIMEOUT_MS = 10_000L
     private const val MODEL_POLL_LOG_INTERVAL = 5
+
+    @Volatile
+    private var appContext: Context? = null
 
     // Model downloads belong to application-level translation infrastructure rather
     // than to one track. This scope deliberately survives cancellation of a track's
@@ -84,6 +91,10 @@ object LyricsTranslator {
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
 
     fun resetUiState() {
         _uiState.value = UiState()
@@ -395,13 +406,26 @@ object LyricsTranslator {
             }
 
             val monitor = modelDownloadScope.async {
-                monitorModelDownload(
-                    manager = manager,
-                    model = model,
-                    languageKey = languageKey,
-                    sourceLanguage = sourceLanguage,
-                    conditions = conditions
-                )
+                try {
+                    monitorModelDownload(
+                        manager = manager,
+                        model = model,
+                        languageKey = languageKey,
+                        sourceLanguage = sourceLanguage,
+                        conditions = conditions
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val reason = e.localizedMessage ?: e.javaClass.simpleName
+                    Log.e(TAG, "translation model monitor failed: $languageKey", e)
+                    markRetryRequired(
+                        language = sourceLanguage,
+                        phase = Phase.DOWNLOAD_FAILED,
+                        reason = reason
+                    )
+                    false
+                }
             }
             activeModelMonitors[languageKey] = monitor
             monitor.invokeOnCompletion {
@@ -437,15 +461,36 @@ object LyricsTranslator {
     ): Boolean {
         val task = getOrStartDownloadTask(manager, model, languageKey, conditions)
         val startedAt = SystemClock.elapsedRealtime()
+        var activeTimeoutElapsedMs = 0L
         var pollCount = 0
+        var previousThermalRestriction: Boolean? = null
 
-        updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = sourceLanguage)
+        while (activeTimeoutElapsedMs < MODEL_DOWNLOAD_TIMEOUT_MS) {
+            val loopStartedAt = SystemClock.elapsedRealtime()
+            val thermalStatus = currentThermalStatus()
+            val thermallyRestricted = isThermallyRestricted(thermalStatus)
+            val waitPhase = if (thermallyRestricted) {
+                Phase.WAITING_FOR_SYSTEM
+            } else {
+                Phase.DOWNLOADING_MODEL
+            }
 
-        while (SystemClock.elapsedRealtime() - startedAt < MODEL_DOWNLOAD_TIMEOUT_MS) {
-            // Re-publish the download state so a track change to English/no-lyrics
-            // cannot make the Phone UI look as though the background model download
-            // has stopped. The progress indicator remains indeterminate by design.
-            updateState(Phase.DOWNLOADING_MODEL, sourceLanguage = sourceLanguage)
+            // Re-publish the current model state so a track change to English/no-lyrics
+            // cannot make the Phone UI look as though the background operation stopped.
+            updateState(waitPhase, sourceLanguage = sourceLanguage)
+
+            if (previousThermalRestriction != thermallyRestricted) {
+                if (thermallyRestricted) {
+                    Log.d(
+                        TAG,
+                        "model download waiting for system thermal conditions: " +
+                            "$languageKey thermalStatus=${thermalStatus ?: "unknown"}"
+                    )
+                } else if (previousThermalRestriction == true) {
+                    Log.d(TAG, "model download resumed after thermal restriction: $languageKey")
+                }
+                previousThermalRestriction = thermallyRestricted
+            }
 
             val downloaded = withTimeoutOrNull(MODEL_CHECK_TIMEOUT_MS) {
                 isModelDownloaded(manager, model)
@@ -454,7 +499,7 @@ object LyricsTranslator {
                 Log.d(TAG, "model became available while polling: $languageKey")
                 activeModelDownloads.remove(languageKey, task)
                 retryRequired.remove(sourceLanguage)
-                if (_uiState.value.phase == Phase.DOWNLOADING_MODEL &&
+                if (isModelWaitPhase(_uiState.value.phase) &&
                     _uiState.value.sourceLanguage == sourceLanguage
                 ) {
                     resetUiState()
@@ -477,14 +522,25 @@ object LyricsTranslator {
 
             pollCount++
             if (pollCount % MODEL_POLL_LOG_INTERVAL == 0) {
-                val elapsedSec = (SystemClock.elapsedRealtime() - startedAt) / 1000
+                val wallElapsedSec = (SystemClock.elapsedRealtime() - startedAt) / 1000
+                val activeTimeoutSec = activeTimeoutElapsedMs / 1000
                 Log.d(
                     TAG,
-                    "model download still pending: $languageKey elapsed=${elapsedSec}s " +
+                    "model download still pending: $languageKey wallElapsed=${wallElapsedSec}s " +
+                        "activeTimeout=${activeTimeoutSec}s thermalStatus=${thermalStatus ?: "unknown"} " +
                         "taskComplete=${task.isComplete}"
                 )
             }
+
             delay(MODEL_POLL_INTERVAL_MS)
+
+            // The five-minute timeout measures active download time only. Android may
+            // intentionally keep DownloadManager pending while the device is thermally
+            // restricted; that waiting period must not turn into a false Retry error.
+            if (!thermallyRestricted) {
+                activeTimeoutElapsedMs +=
+                    (SystemClock.elapsedRealtime() - loopStartedAt).coerceAtLeast(0L)
+            }
         }
 
         // One final authoritative check before showing Retry. The underlying ML Kit
@@ -496,7 +552,7 @@ object LyricsTranslator {
             Log.d(TAG, "model became available on final check: $languageKey")
             activeModelDownloads.remove(languageKey, task)
             retryRequired.remove(sourceLanguage)
-            if (_uiState.value.phase == Phase.DOWNLOADING_MODEL &&
+            if (isModelWaitPhase(_uiState.value.phase) &&
                 _uiState.value.sourceLanguage == sourceLanguage
             ) {
                 resetUiState()
@@ -504,7 +560,8 @@ object LyricsTranslator {
             return true
         }
 
-        val reason = "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min"
+        val reason =
+            "Model still unavailable after ${MODEL_DOWNLOAD_TIMEOUT_MS / 60_000} min of active download time"
         Log.e(TAG, reason)
         markRetryRequired(
             language = sourceLanguage,
@@ -512,6 +569,28 @@ object LyricsTranslator {
             reason = reason
         )
         return false
+    }
+
+    private fun isModelWaitPhase(phase: Phase): Boolean {
+        return phase == Phase.DOWNLOADING_MODEL || phase == Phase.WAITING_FOR_SYSTEM
+    }
+
+    private fun currentThermalStatus(): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val context = appContext ?: return null
+        return try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            powerManager?.currentThermalStatus
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to read thermal status", e)
+            null
+        }
+    }
+
+    private fun isThermallyRestricted(status: Int?): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            status != null &&
+            status >= PowerManager.THERMAL_STATUS_MODERATE
     }
 
     private suspend fun translateText(
