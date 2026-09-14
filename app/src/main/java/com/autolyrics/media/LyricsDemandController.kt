@@ -13,6 +13,7 @@ internal object LyricsDemandController {
     private var carProjectionConnected = false
     private val listeners = linkedSetOf<(Boolean) -> Unit>()
 
+    @Volatile
     var isActive: Boolean = false
         private set
 
