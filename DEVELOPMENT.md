@@ -211,9 +211,16 @@ When `has_richsync=1`, Auto Lyrics prefers `track.richsync.get`. RichSync line o
 word timestamp = ts + o
 ```
 
-The resulting timestamps are stored in `LyricWord` and persist through `LyricsCache` when word chunks are exposed.
+The resulting timestamps are stored in `LyricWord` and persist through `LyricsCache` for both whitespace-separated and naturally adjacent scripts.
 
-**Current renderer limitation:** the phone/Performance/Android Auto renderers insert spaces between `LyricWord` items. To avoid corrupting scripts whose RichSync chunks are naturally adjacent, `MusixmatchClient` currently suppresses word chunks for lines whose text contains no whitespace. Those lines retain exact text and line timing but temporarily behave as LINE_SYNC. This is a renderer limitation, not missing Musixmatch timing data.
+RichSync chunk text is intentionally stored without synthetic separators. `LyricWordLayout` aligns each timed word back to the original `LyricLine.text` and reconstructs the exact prefix/suffix text between chunks. MainActivity, PerformanceActivity, and Android Auto all use this layout when rendering karaoke. This means, for example:
+
+```text
+Hey Jude       → Hey + " " + Jude
+君を忘れない   → 君を + "" + 忘れない
+```
+
+The same mechanism also preserves mixed-script lines instead of hard-coding a Japanese-specific rule.
 
 If RichSync is absent or unusable, `track.subtitles.get` LRC is parsed as LINE_SYNC. Both are `LyricsStatus.FOUND` because both are synchronized; only the timing granularity differs.
 
@@ -287,7 +294,7 @@ normalized album
 rounded duration in seconds
 ```
 
-A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus each `LyricWord(timeMs, text)`, so a cached Musixmatch RichSync result remains word-synchronized after restart/reload for lines where word chunks are exposed.
+A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus each `LyricWord(timeMs, text)`, so a cached Musixmatch RichSync result remains word-synchronized after restart/reload.
 
 Per-entry `refreshAfterMs` controls background refresh:
 
@@ -341,11 +348,11 @@ More can show title, artist, album, provider, lyric synchronization state, detec
 
 `MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE` carries the current lyric text. The original line is prefixed with `▶`; translated text, when present, is placed on the second line without another marker.
 
-### Browse refresh behavior and karaoke look-ahead
+### Browse refresh behavior and karaoke timing
 
 Browse refreshes notify section IDs instead of rebuilding the root tabs on every lyric update. Updates are throttled to reduce Android Auto browse churn.
 
-`LyricsBrowserService` currently uses short karaoke look-ahead windows when formatting browse/now-playing text. This does not change the media position or provider timestamps; it only affects how much upcoming word text is enclosed in the visual karaoke marker between browse refreshes. If word highlighting appears early specifically in Android Auto, inspect this behavior before introducing a provider-wide timestamp offset.
+Karaoke selection now follows the provider timestamp strictly: the marked word is the latest `LyricWord.timeMs <= current position`. The previous 300/600 ms future-word look-ahead was removed because it could make accurate RichSync appear early. The browse tree is still throttled, so its visual word transition can be coarser or slightly late compared with the phone/Performance UI; it is no longer intentionally advanced into future words. The now-playing subtitle is checked every 200 ms.
 
 Current constants include:
 
@@ -356,8 +363,6 @@ Current constants include:
 | `CURRENT_LINE_PREFIX` | `▶  ` | Current row marker. |
 | `PAD_WIDTH` | 60 | Character padding for browse items. |
 | `NOTIFY_THROTTLE_MS` | 500 ms | Minimum browse-tree refresh interval. |
-| `BROWSE_KARAOKE_WINDOW_MS` | 600 ms | Browse karaoke look-ahead. |
-| `SUBTITLE_KARAOKE_WINDOW_MS` | 300 ms | Now-playing karaoke look-ahead. |
 | `SESSION_REFRESH_MS` | 1500 ms | MediaSession playback-state refresh interval. |
 | `PLAIN_LOOP_DELAY_MS` | 2000 ms | Plain-lyrics browse advance check interval. |
 
@@ -393,7 +398,8 @@ Provider/matching regression cases should continue to cover:
 - A failed matcher call cannot cause unrelated subtitle/richsync data to be accepted.
 - Embedded Musixmatch RichSync is parsed before line subtitle fallback.
 - RichSync uses `ts + o` for word timing.
-- Japanese/no-space RichSync retains exact line text while the current renderer limitation suppresses per-word chunks.
+- Japanese/no-space RichSync retains both exact line text and per-word timestamps.
+- `LyricWordLayout` reconstructs English spaces, Japanese adjacency, and mixed-script separators from the original line.
 - Synchronized candidates outrank plain candidates.
 
 Manual DHU regression pass after Android Auto UI changes:
@@ -406,7 +412,8 @@ Manual DHU regression pass after Android Auto UI changes:
 6. More shows provider/details without affecting timing.
 7. Now-playing subtitle marks the current lyric with `▶`.
 8. Plain lyrics still advance correctly.
-9. WORD_SYNC highlighting does not inject spaces into scripts whose RichSync chunks are naturally adjacent once renderer support is enabled.
+9. WORD_SYNC highlighting preserves the original spacing for English, Japanese/no-space, and mixed-script lines.
+10. Android Auto does not mark a future word before its timestamp solely to hide browse refresh latency.
 
 ## Key files
 
@@ -419,6 +426,7 @@ Manual DHU regression pass after Android Auto UI changes:
 | `app/src/main/java/com/autolyrics/lyrics/LyricsProviderResolver.kt` | Common metadata/quality/source scoring and final provider selection. |
 | `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Persistent lyrics cache and per-entry refresh interval. |
 | `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Player metadata cleanup before provider search. |
+| `app/src/main/java/com/autolyrics/util/LyricWordLayout.kt` | Reconstructs exact separators around timed lyric chunks from the original line text. |
 | `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls, karaoke text. |
 | `app/src/main/res/xml/automotive_app_desc.xml` | Declares the Android Auto media integration. |
 | `.env.example` | Local PetitLyrics template / no-`.env` fallback. |
