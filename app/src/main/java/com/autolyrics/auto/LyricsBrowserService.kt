@@ -13,6 +13,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media.MediaBrowserServiceCompat
+import com.autolyrics.lyrics.KaraokeTiming
 import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
@@ -538,15 +539,11 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val words = line.words
         if (words.isEmpty()) return line.text
 
-        var currentIdx = -1
-        for (i in words.indices) {
-            if (words[i].timeMs <= posMs) currentIdx = i
-            else break
-        }
+        val currentIdx = KaraokeTiming.activeWordIndex(words, posMs)
         if (currentIdx < 0) return line.text
 
         val sameLine = lineIdx == lastKaraokeLineIdx
-        if (sameLine && currentIdx <= lastKaraokeWordIdx && lastKaraokeText != null) {
+        if (sameLine && currentIdx == lastKaraokeWordIdx && lastKaraokeText != null) {
             return lastKaraokeText!!
         }
 
