@@ -256,9 +256,6 @@ class TranslationStatusView @JvmOverloads constructor(
             }
 
             LyricsTranslator.Phase.TRANSLATING -> {
-                // The model is now available to ML Kit. A completed network transfer can
-                // sit at 99% while ML Kit installs/verifies it; reaching TRANSLATING is
-                // the authoritative signal that model preparation finished.
                 showDeterminateProgress(100, animate = true)
             }
 
@@ -323,10 +320,6 @@ class TranslationStatusView @JvmOverloads constructor(
                 .coerceIn(1, MODEL_TRANSFER_MAX_PERCENT)
             showDeterminateProgress(transferPercent, animate = true)
         } else if (progressBar.isIndeterminate || progressBar.progress <= 0) {
-            // Once byte progress has started, keep the last determinate value if the
-            // implementation-dependent DownloadManager row briefly disappears. This
-            // also prevents a completed transfer from falling back to an indeterminate
-            // bar while ML Kit installs/verifies the downloaded model.
             showIndeterminateProgress()
         }
     }
@@ -365,17 +358,11 @@ class TranslationStatusView @JvmOverloads constructor(
     private fun queryDownloadManager(sourceLanguage: String): DownloadManagerInfo {
         val expectedFiles = expectedModelFileNames(sourceLanguage)
         if (expectedFiles.isEmpty()) {
-            return DownloadManagerInfo(
-                expectedFiles = emptySet(),
-                error = "no filename candidates"
-            )
+            return DownloadManagerInfo(expectedFiles = emptySet(), error = "no filename candidates")
         }
 
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-            ?: return DownloadManagerInfo(
-                expectedFiles = expectedFiles,
-                error = "Download progress unavailable"
-            )
+            ?: return DownloadManagerInfo(expectedFiles = expectedFiles, error = "Download progress unavailable")
 
         return try {
             manager.query(DownloadManager.Query()).use { cursor ->
@@ -398,8 +385,7 @@ class TranslationStatusView @JvmOverloads constructor(
                     val uriFile = uri.substringAfterLast('/').substringBefore('?').lowercase(Locale.US)
                     val titleFile = title.lowercase(Locale.US)
                     val matchedFile = expectedFiles.firstOrNull { candidate ->
-                        uriFile == candidate ||
-                            titleFile == candidate ||
+                        uriFile == candidate || titleFile == candidate ||
                             uri.lowercase(Locale.US).endsWith("/$candidate")
                     } ?: continue
 
@@ -412,8 +398,7 @@ class TranslationStatusView @JvmOverloads constructor(
                         bestStatus == DownloadManager.STATUS_RUNNING ||
                         bestStatus == DownloadManager.STATUS_PAUSED
 
-                    if (bestFile == null ||
-                        (isActive && !bestIsActive) ||
+                    if (bestFile == null || (isActive && !bestIsActive) ||
                         (isActive == bestIsActive && modified >= bestModified)
                     ) {
                         bestFile = matchedFile
@@ -433,10 +418,7 @@ class TranslationStatusView @JvmOverloads constructor(
                 )
             }
         } catch (e: Exception) {
-            DownloadManagerInfo(
-                expectedFiles = expectedFiles,
-                error = e.javaClass.simpleName
-            )
+            DownloadManagerInfo(expectedFiles = expectedFiles, error = e.javaClass.simpleName)
         }
     }
 
@@ -454,9 +436,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
 
         return sourceCodes.mapTo(linkedSetOf()) { sourceCode ->
-            listOf(sourceCode, "en")
-                .sorted()
-                .joinToString("_") + ".zip"
+            listOf(sourceCode, "en").sorted().joinToString("_") + ".zip"
         }
     }
 
@@ -480,8 +460,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
 
         if (phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM) {
-            val thermal = compactThermalStatusName(thermalStatus)
-            return "0 B / ? · Waiting · Thermal: $thermal"
+            return "0 B / ? · Waiting · Thermal: ${compactThermalStatusName(thermalStatus)}"
         }
 
         if (!progressBar.isIndeterminate && progressBar.progress > 0) {
@@ -531,16 +510,8 @@ class TranslationStatusView @JvmOverloads constructor(
     private fun formatBytes(bytes: Long?): String {
         if (bytes == null || bytes < 0) return "?"
         return when {
-            bytes >= 1024L * 1024L -> String.format(
-                Locale.US,
-                "%.1f MB",
-                bytes.toDouble() / (1024.0 * 1024.0)
-            )
-            bytes >= 1024L -> String.format(
-                Locale.US,
-                "%.1f KB",
-                bytes.toDouble() / 1024.0
-            )
+            bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes.toDouble() / (1024.0 * 1024.0))
+            bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes.toDouble() / 1024.0)
             else -> "$bytes B"
         }
     }
@@ -555,9 +526,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
     private fun currentDownloadElapsedMs(sourceLanguage: String?): Long {
         val key = sourceLanguage ?: UNKNOWN_LANGUAGE_KEY
-        val startedAt = downloadStartedAtByLanguage.getOrPut(key) {
-            SystemClock.elapsedRealtime()
-        }
+        val startedAt = downloadStartedAtByLanguage.getOrPut(key) { SystemClock.elapsedRealtime() }
         return (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
     }
 
@@ -577,9 +546,7 @@ class TranslationStatusView @JvmOverloads constructor(
         return if (detail == null) prefix else "$prefix · $detail"
     }
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         private const val PREFS_NAME = "auto_lyrics_prefs"
@@ -596,12 +563,9 @@ class TranslationStatusView @JvmOverloads constructor(
             val translationSwitch = activity.findViewById<View>(R.id.switch_translation) ?: return
             val translationRow = translationSwitch.parent as? ViewGroup ?: return
             val settingsPanel = translationRow.parent as? LinearLayout ?: return
-
             if (settingsPanel.findViewWithTag<View>(VIEW_TAG) != null) return
 
-            val view = TranslationStatusView(activity).apply {
-                tag = VIEW_TAG
-            }
+            val view = TranslationStatusView(activity).apply { tag = VIEW_TAG }
             val index = settingsPanel.indexOfChild(translationRow)
             settingsPanel.addView(
                 view,
