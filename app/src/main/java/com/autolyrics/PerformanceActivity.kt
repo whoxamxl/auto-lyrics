@@ -1,18 +1,9 @@
 package com.autolyrics
 
-import android.animation.ValueAnimator
 import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Bundle
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.AbsoluteSizeSpan
-import android.text.style.BackgroundColorSpan
-import android.text.style.ForegroundColorSpan
-import android.text.style.StyleSpan
 import android.view.View
 import android.view.WindowManager
-import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
@@ -24,10 +15,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.autolyrics.media.MediaTracker
-import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
-import com.autolyrics.util.LyricWordLayout
+import com.autolyrics.ui.PerformanceLyricsView
 import kotlinx.coroutines.launch
 
 class PerformanceActivity : AppCompatActivity() {
@@ -39,21 +29,17 @@ class PerformanceActivity : AppCompatActivity() {
     private lateinit var trackTitle: TextView
     private lateinit var trackArtist: TextView
     private lateinit var sourceLabel: TextView
-    private lateinit var prevLine: TextView
-    private lateinit var currentLine: TextView
-    private lateinit var nextLine: TextView
+    private lateinit var lyricsView: PerformanceLyricsView
     private lateinit var exitHint: TextView
 
-    private var lastRenderedIndex = -1
-    private var lastRenderedWord = -1
-    private var wordPopAnimator: ValueAnimator? = null
+    private var lyricsIdentity = 0
+    private var lastTrackKey: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_performance)
 
         enterImmersiveMode()
-
         mediaTracker = MediaTracker.getInstance(this)
 
         root = findViewById(R.id.perf_root)
@@ -62,11 +48,10 @@ class PerformanceActivity : AppCompatActivity() {
         trackTitle = findViewById(R.id.perf_track_title)
         trackArtist = findViewById(R.id.perf_track_artist)
         sourceLabel = findViewById(R.id.perf_source)
-        prevLine = findViewById(R.id.perf_prev_line)
-        currentLine = findViewById(R.id.perf_current_line)
-        nextLine = findViewById(R.id.perf_next_line)
+        lyricsView = findViewById(R.id.perf_lyrics_view)
         exitHint = findViewById(R.id.perf_exit_hint)
 
+        lyricsView.positionProvider = { safePosition() }
         root.setOnClickListener { finish() }
 
         exitHint.animate().alpha(0f).setStartDelay(3000).setDuration(1000).start()
@@ -78,18 +63,12 @@ class PerformanceActivity : AppCompatActivity() {
         }
     }
 
-    override fun onDestroy() {
-        wordPopAnimator?.cancel()
-        wordPopAnimator = null
-        super.onDestroy()
-    }
-
     private fun enterImmersiveMode() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        WindowInsetsControllerCompat(window, window.decorView).let { ctrl ->
-            ctrl.hide(WindowInsetsCompat.Type.systemBars())
-            ctrl.systemBarsBehavior =
+        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
@@ -98,6 +77,9 @@ class PerformanceActivity : AppCompatActivity() {
         state.track?.let { track ->
             trackTitle.text = track.title
             trackArtist.text = track.artist.ifBlank { "" }
+        } ?: run {
+            trackTitle.text = ""
+            trackArtist.text = ""
         }
 
         state.albumArt?.let { art ->
@@ -106,166 +88,67 @@ class PerformanceActivity : AppCompatActivity() {
             albumArt.visibility = View.VISIBLE
         } ?: run {
             albumBg.setImageDrawable(null)
+            albumArt.setImageDrawable(null)
             albumArt.visibility = View.GONE
         }
 
         if (state.source.isNotBlank()) {
-            sourceLabel.text = state.source
+            sourceLabel.text = if (state.detectedLanguage != null) {
+                "${state.source} · ${state.detectedLanguage}→en"
+            } else {
+                state.source
+            }
             sourceLabel.visibility = View.VISIBLE
         } else {
             sourceLabel.visibility = View.GONE
         }
 
         val colors = state.albumColors
-        val accentColor = colors?.vibrant ?: DEFAULT_ACCENT
+        lyricsView.setColors(
+            active = colors?.textPrimary ?: Color.WHITE,
+            inactive = colors?.textDim ?: DEFAULT_DIM,
+            highlight = colors?.vibrant ?: DEFAULT_ACCENT
+        )
+        lyricsView.isPlaying = state.isPlaying
 
         when (state.status) {
-            LyricsStatus.NO_MEDIA -> {
-                prevLine.text = ""
-                currentLine.text = "Play a song"
-                nextLine.text = ""
-            }
-            LyricsStatus.LOADING -> {
-                prevLine.text = ""
-                currentLine.text = "Loading lyrics…"
-                nextLine.text = ""
-            }
-            LyricsStatus.NOT_FOUND -> {
-                prevLine.text = ""
-                currentLine.text = "No lyrics found"
-                nextLine.text = ""
-            }
-            LyricsStatus.ERROR -> {
-                prevLine.text = ""
-                currentLine.text = "Error loading lyrics"
-                nextLine.text = ""
-            }
-            LyricsStatus.PLAIN_ONLY -> {
-                renderPlain(state)
-            }
-            LyricsStatus.FOUND -> {
-                renderSynced(state, accentColor)
-            }
-        }
-    }
-
-    private fun renderPlain(state: LyricsState) {
-        val lines = state.lines
-        if (lines.isEmpty()) {
-            prevLine.text = ""
-            currentLine.text = "♪"
-            nextLine.text = ""
-            return
-        }
-
-        val durationMs = state.track?.durationMs ?: 0
-        val posMs = try {
-            mediaTracker.getCurrentPositionMs().coerceAtLeast(0)
-        } catch (_: Exception) { 0L }
-
-        val idx = if (durationMs > 0) {
-            ((posMs.toFloat() / durationMs) * lines.size).toInt()
-                .coerceIn(0, lines.size - 1)
-        } else 0
-
-        updateSideLine(prevLine, lines.getOrNull(idx - 1)?.text)
-        currentLine.text = lines[idx].text.ifBlank { "♪" }
-        updateSideLine(nextLine, lines.getOrNull(idx + 1)?.text)
-    }
-
-    private fun renderSynced(state: LyricsState, accentColor: Int) {
-        val idx = state.currentIndex
-        val wordIdx = state.currentWordIndex
-        val lines = state.lines
-
-        if (idx < 0 || idx >= lines.size) {
-            prevLine.text = ""
-            currentLine.text = "♪"
-            nextLine.text = ""
-            return
-        }
-
-        val lineChanged = idx != lastRenderedIndex
-        val wordChanged = wordIdx != lastRenderedWord
-        if (!lineChanged && !wordChanged) return
-
-        lastRenderedIndex = idx
-        lastRenderedWord = wordIdx
-
-        if (lineChanged) {
-            updateSideLine(prevLine, lines.getOrNull(idx - 1)?.text)
-            updateSideLine(nextLine, lines.getOrNull(idx + 1)?.text)
-        }
-
-        val line = lines[idx]
-        val hasKaraoke = line.words.isNotEmpty()
-
-        if (hasKaraoke && wordIdx >= 0) {
-            wordPopAnimator?.cancel()
-
-            val baseSizePx = currentLine.textSize.toInt()
-            val targetSizePx = (baseSizePx * 1.5).toInt()
-            val accentBg = setAlpha(accentColor, 0.30f)
-
-            wordPopAnimator = ValueAnimator.ofFloat(1.0f, 1.5f).apply {
-                duration = 220
-                interpolator = OvershootInterpolator(1.5f)
-                addUpdateListener { anim ->
-                    val scale = anim.animatedValue as Float
-                    val sizePx = (baseSizePx * scale).toInt()
-                    currentLine.text = buildKaraokeSpannable(
-                        line, wordIdx, sizePx, accentColor, accentBg
-                    )
+            LyricsStatus.NO_MEDIA -> lyricsView.setMessage("Play a song")
+            LyricsStatus.LOADING -> lyricsView.setMessage("Loading lyrics…")
+            LyricsStatus.NOT_FOUND -> lyricsView.setMessage("No lyrics found")
+            LyricsStatus.ERROR -> lyricsView.setMessage("Error loading lyrics")
+            LyricsStatus.PLAIN_ONLY, LyricsStatus.FOUND -> {
+                bumpIdentityIfTrackChanged(state)
+                val plain = state.status == LyricsStatus.PLAIN_ONLY
+                lyricsView.setLyrics(
+                    newLines = state.lines,
+                    plain = plain,
+                    durationMs = state.track?.durationMs ?: 0L,
+                    linesId = lyricsIdentity
+                )
+                if (!plain && state.currentIndex >= 0) {
+                    lyricsView.setActiveLine(state.currentIndex)
                 }
-                start()
             }
-        } else {
-            wordPopAnimator?.cancel()
-            currentLine.text = line.text.ifBlank { "♪" }
         }
     }
 
-    private fun buildKaraokeSpannable(
-        line: LyricLine,
-        activeWordIdx: Int,
-        activeSizePx: Int,
-        accentColor: Int,
-        accentBg: Int
-    ): SpannableStringBuilder {
-        val ssb = SpannableStringBuilder()
-        val layout = LyricWordLayout.layout(line)
-        line.words.forEachIndexed { wi, word ->
-            ssb.append(layout.prefixes.getOrElse(wi) { "" })
-            val start = ssb.length
-            ssb.append(word.text)
-            val end = ssb.length
-
-            if (wi == activeWordIdx) {
-                ssb.setSpan(AbsoluteSizeSpan(activeSizePx), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                ssb.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                ssb.setSpan(ForegroundColorSpan(accentColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                ssb.setSpan(BackgroundColorSpan(accentBg), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
+    private fun bumpIdentityIfTrackChanged(state: LyricsState) {
+        val track = state.track
+        val key = track?.let { "${it.title}|${it.artist}|${it.album}|${it.durationMs}" }
+        if (key != lastTrackKey) {
+            lastTrackKey = key
+            lyricsIdentity++
         }
-        ssb.append(layout.suffix)
-        return ssb
     }
 
-    private fun updateSideLine(tv: TextView, text: String?) {
-        val newText = text ?: ""
-        if (tv.text.toString() == newText) return
-        tv.animate().alpha(0f).setDuration(100).withEndAction {
-            tv.text = newText
-            tv.animate().alpha(1f).setDuration(180).start()
-        }.start()
+    private fun safePosition(): Long = try {
+        mediaTracker.getCurrentPositionMs()
+    } catch (_: Exception) {
+        0L
     }
 
     companion object {
         private val DEFAULT_ACCENT = Color.parseColor("#FFD54F")
-
-        private fun setAlpha(color: Int, alpha: Float): Int {
-            val a = (alpha * 255).toInt().coerceIn(0, 255)
-            return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
-        }
+        private val DEFAULT_DIM = Color.parseColor("#66FFFFFF")
     }
 }
