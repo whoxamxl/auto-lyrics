@@ -1,6 +1,7 @@
 package com.autolyrics.lyrics
 
 import com.autolyrics.model.LyricLine
+import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
 import org.junit.Assert.assertEquals
@@ -184,7 +185,7 @@ class LyricsProviderResolverTest {
     }
 
     @Test
-    fun westernTrackKeepsLrcLibTiePreference() {
+    fun westernTrackKeepsLrcLibTiePreferenceInStandardMode() {
         val track = TrackInfo("Example Song", "Example Artist", "Example Album", 200_000L)
         val lrcLib = candidate(
             provider = "LRCLIB",
@@ -194,16 +195,117 @@ class LyricsProviderResolverTest {
             durationSec = 200.0,
             syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
         )
-        val petit = candidate(
-            provider = "PetitLyrics",
+        val musixmatch = candidate(
+            provider = "Musixmatch",
             title = track.title,
             artist = track.artist,
             album = track.album,
             durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
+            withWords = true
+        )
+
+        val selected = LyricsProviderResolver.selectBest(track, listOf(lrcLib, musixmatch))
+
+        assertEquals("LRCLIB", selected?.candidate?.provider)
+    }
+
+    @Test
+    fun westernTrackPrefersEquivalentWordSyncInKaraokeMode() {
+        val track = TrackInfo("Example Song", "Example Artist", "Example Album", 200_000L)
+        val lrcLib = candidate(
+            provider = "LRCLIB",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
+        )
+        val musixmatch = candidate(
+            provider = "Musixmatch",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
+            withWords = true
+        )
+
+        val selected = LyricsProviderResolver.selectBest(
+            track,
+            listOf(lrcLib, musixmatch),
+            preferWordSync = true
+        )
+
+        assertEquals("Musixmatch", selected?.candidate?.provider)
+    }
+
+    @Test
+    fun karaokePreferenceRequiresActualWordPayload() {
+        val track = TrackInfo("Example Song", "Example Artist", "Example Album", 200_000L)
+        val lrcLib = candidate(
+            provider = "LRCLIB",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
+        )
+        val mislabeledWordSync = candidate(
+            provider = "Musixmatch",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
+            withWords = false
+        )
+
+        val selected = LyricsProviderResolver.selectBest(
+            track,
+            listOf(lrcLib, mislabeledWordSync),
+            preferWordSync = true
+        )
+
+        assertEquals("LRCLIB", selected?.candidate?.provider)
+    }
+
+    @Test
+    fun karaokePreferenceDoesNotOverrideMateriallyWorsePayload() {
+        val track = TrackInfo("Example Song", "Example Artist", "Example Album", 200_000L)
+        val lrcLib = candidate(
+            provider = "LRCLIB",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            syncKind = LyricsProviderCandidate.SyncKind.LINE_SYNC
+        )
+        val shortWordLines = (0 until 10).map { index ->
+            val timeMs = 1_000L + index * 4_000L
+            LyricLine(
+                timeMs = timeMs,
+                text = "word$index",
+                words = listOf(LyricWord(timeMs, "word$index"))
+            )
+        }
+        val weakWordSync = LyricsProviderCandidate(
+            provider = "Musixmatch",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationSec = 200.0,
+            lines = shortWordLines,
+            status = LyricsStatus.FOUND,
+            source = "Musixmatch · test",
             syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC
         )
 
-        val selected = LyricsProviderResolver.selectBest(track, listOf(lrcLib, petit))
+        val selected = LyricsProviderResolver.selectBest(
+            track,
+            listOf(lrcLib, weakWordSync),
+            preferWordSync = true
+        )
 
         assertEquals("LRCLIB", selected?.candidate?.provider)
     }
@@ -243,20 +345,29 @@ class LyricsProviderResolverTest {
         durationSec: Double?,
         status: LyricsStatus = LyricsStatus.FOUND,
         syncKind: LyricsProviderCandidate.SyncKind,
-        artistQueryCorroborated: Boolean = false
+        artistQueryCorroborated: Boolean = false,
+        withWords: Boolean = false
     ): LyricsProviderCandidate {
+        val lines = listOf(
+            LyricLine(1_000, "test line one"),
+            LyricLine(10_000, "test line two"),
+            LyricLine(20_000, "test line three"),
+            LyricLine(30_000, "test line four")
+        ).map { line ->
+            if (withWords) {
+                line.copy(words = listOf(LyricWord(line.timeMs, line.text)))
+            } else {
+                line
+            }
+        }
+
         return LyricsProviderCandidate(
             provider = provider,
             title = title,
             artist = artist,
             album = album,
             durationSec = durationSec,
-            lines = listOf(
-                LyricLine(1_000, "テスト行一"),
-                LyricLine(10_000, "テスト行二"),
-                LyricLine(20_000, "テスト行三"),
-                LyricLine(30_000, "テスト行四")
-            ),
+            lines = lines,
             status = status,
             source = "$provider · test",
             syncKind = syncKind,
