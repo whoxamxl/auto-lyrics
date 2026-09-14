@@ -72,6 +72,7 @@ object MusixmatchClient {
     internal data class TrackCandidate(
         val trackId: Long?,
         val commonTrackId: Long?,
+        val spotifyTrackId: String,
         val title: String,
         val artist: String,
         val album: String,
@@ -100,8 +101,21 @@ object MusixmatchClient {
         val macro = fetchMacro(track, prefs) ?: return null
         val match = parseMacroResponse(macro.toString()) ?: return null
         val candidate = match.candidate
+        val requestedSpotifyTrackId = SpotifyTrackIdentity.trackId(track)
 
         logMatchDiagnostics(track, candidate)
+
+        if (
+            requestedSpotifyTrackId != null &&
+            candidate.spotifyTrackId.isNotBlank() &&
+            !candidate.spotifyTrackId.equals(requestedSpotifyTrackId, ignoreCase = true)
+        ) {
+            debugLog(
+                "mobile macro match rejected: spotify id mismatch " +
+                    "requested=$requestedSpotifyTrackId matched=${candidate.spotifyTrackId}"
+            )
+            return null
+        }
 
         if (candidate.instrumental) {
             debugLog("mobile macro match rejected: instrumental")
@@ -366,6 +380,7 @@ object MusixmatchClient {
         val candidate = TrackCandidate(
             trackId = track.longOrNull("track_id"),
             commonTrackId = track.longOrNull("commontrack_id"),
+            spotifyTrackId = track.string("track_spotify_id"),
             title = title,
             artist = track.string("artist_name"),
             album = track.string("album_name"),
@@ -526,6 +541,7 @@ object MusixmatchClient {
         )
         debugLog(
             "mobile macro match id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
+                "spotify=${candidate.spotifyTrackId.ifBlank { "-" }} " +
                 "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
                 "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
                 "instrumental=${candidate.instrumental}"
