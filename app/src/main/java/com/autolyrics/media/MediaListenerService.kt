@@ -67,14 +67,12 @@ class MediaListenerService : NotificationListenerService() {
         val current = selectedSessionToken?.let { token ->
             filtered.firstOrNull { controller -> controller.sessionToken == token }
         }
-        val currentIsPlaying =
-            current?.playbackState?.state == PlaybackState.STATE_PLAYING
-
-        val playing = filtered.firstOrNull { controller ->
+        val best = current?.takeIf { controller ->
             controller.playbackState?.state == PlaybackState.STATE_PLAYING
-        }
+        } ?: filtered.firstOrNull { controller ->
+            controller.playbackState?.state == PlaybackState.STATE_PLAYING
+        } ?: filtered.first()
 
-        val best = if (currentIsPlaying) current else playing ?: filtered.first()
         selectedSessionToken = best.sessionToken
         MediaTracker.getInstance(this).onMediaSessionChanged(best)
     }
