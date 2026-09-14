@@ -22,17 +22,27 @@ class SpotifyPlaybackIdentityTest {
     }
 
     @Test
-    fun extractsTrackIdFromSpotifyMediaId() {
+    fun extractsTrackIdFromSpotifyTrackUrl() {
         val track = track(
             sourcePackage = SpotifyTrackIdentity.PACKAGE_NAME,
-            sourceId = spotifyId
+            sourceUri = "https://open.spotify.com/track/$spotifyId?si=test"
         )
 
         assertEquals(spotifyId, SpotifyTrackIdentity.trackId(track))
     }
 
     @Test
-    fun rejectsSpotifyLookingIdFromAnotherPlayer() {
+    fun rejectsBareMediaIdBecauseResourceTypeIsUnknown() {
+        val track = track(
+            sourcePackage = SpotifyTrackIdentity.PACKAGE_NAME,
+            sourceId = spotifyId
+        )
+
+        assertNull(SpotifyTrackIdentity.trackId(track))
+    }
+
+    @Test
+    fun rejectsSpotifyLookingUriFromAnotherPlayer() {
         val track = track(
             sourcePackage = "com.example.player",
             sourceUri = "spotify:track:$spotifyId"
