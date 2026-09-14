@@ -62,6 +62,9 @@ class MediaTracker private constructor(context: Context) {
                 TranslationLanguages.TARGET_LANGUAGE_PREF_KEY -> {
                     handler.post { handleTranslationTargetChanged() }
                 }
+                AA_KARAOKE_ENABLED_KEY -> {
+                    handler.post { handleKaraokePreferenceChanged() }
+                }
             }
         }
 
@@ -277,11 +280,21 @@ class MediaTracker private constructor(context: Context) {
         fetchJob?.cancel()
         fetchJob = scope.launch(Dispatchers.IO) {
             try {
-                val cached = lyricsCache.get(track)
+                val preferWordSync = prefs.getBoolean(AA_KARAOKE_ENABLED_KEY, true)
+                val cacheVariant = if (preferWordSync) {
+                    LyricsCache.Variant.KARAOKE
+                } else {
+                    LyricsCache.Variant.STANDARD
+                }
+                val cached = lyricsCache.get(track, cacheVariant)
                 if (cached != null) {
                     val (lines, status, source) = cached
                     withContext(Dispatchers.Main) {
-                        if (_state.value.track != track) return@withContext
+                        if (_state.value.track != track ||
+                            prefs.getBoolean(AA_KARAOKE_ENABLED_KEY, true) != preferWordSync
+                        ) {
+                            return@withContext
+                        }
                         _state.value = _state.value.copy(
                             lines = lines,
                             currentIndex = -1,
@@ -295,18 +308,22 @@ class MediaTracker private constructor(context: Context) {
                         translateIfNeeded(lines, track)
                     }
 
-                    val cacheAge = lyricsCache.getAge(track)
-                    val refreshAfterMs = lyricsCache.getRefreshAfterMs(track)
+                    val cacheAge = lyricsCache.getAge(track, cacheVariant)
+                    val refreshAfterMs = lyricsCache.getRefreshAfterMs(track, cacheVariant)
                     if (refreshAfterMs > 0L && cacheAge < refreshAfterMs) {
                         return@launch
                     }
                 }
 
-                val decision = fetchBestLyrics(track)
+                val decision = fetchBestLyrics(track, preferWordSync)
                 val result = decision.candidate
 
                 withContext(Dispatchers.Main) {
-                    if (_state.value.track != track) return@withContext
+                    if (_state.value.track != track ||
+                        prefs.getBoolean(AA_KARAOKE_ENABLED_KEY, true) != preferWordSync
+                    ) {
+                        return@withContext
+                    }
 
                     if (result != null) {
                         lyricsCache.put(
@@ -314,7 +331,8 @@ class MediaTracker private constructor(context: Context) {
                             lines = result.lines,
                             status = result.status,
                             source = result.source,
-                            refreshAfterMs = decision.refreshAfterMs
+                            refreshAfterMs = decision.refreshAfterMs,
+                            variant = cacheVariant
                         )
                         _state.value = _state.value.copy(
                             lines = result.lines,
@@ -361,7 +379,10 @@ class MediaTracker private constructor(context: Context) {
         val refreshAfterMs: Long
     )
 
-    private suspend fun fetchBestLyrics(track: TrackInfo): FetchDecision = coroutineScope {
+    private suspend fun fetchBestLyrics(
+        track: TrackInfo,
+        preferWordSync: Boolean
+    ): FetchDecision = coroutineScope {
         // Five seconds is a hard per-provider budget. Healthy responses observed in
         // practice are normally sub-second; waiting 10-15 seconds for one source
         // makes a track change feel broken. runInterruptible allows timeout/cancel
@@ -411,10 +432,14 @@ class MediaTracker private constructor(context: Context) {
             }
         }
 
-        val selected = LyricsProviderResolver.selectBest(track, candidates)
-        // Musixmatch is an opportunistic third source backed by an unofficial web
-        // endpoint. Do not make its availability shorten the otherwise healthy
-        // cache lifetime of LRCLIB/PetitLyrics results.
+        val selected = LyricsProviderResolver.selectBest(
+            track = track,
+            candidates = candidates,
+            preferWordSync = preferWordSync
+        )
+        // Musixmatch is an opportunistic third source backed by an unofficial
+        // mobile endpoint. Do not make its availability shorten the otherwise
+        // healthy cache lifetime of LRCLIB/PetitLyrics results.
         val providerSetComplete = if (PetitLyricsClient.isConfigured) {
             lrcAttempt.candidate != null && petitAttempt?.candidate != null &&
                 !lrcAttempt.timedOut && !petitAttempt.timedOut
@@ -432,8 +457,9 @@ class MediaTracker private constructor(context: Context) {
                 PROVIDER_RESOLVER_TAG,
                 selected?.let {
                     "selected=${it.candidate.provider} final=${"%.3f".format(it.finalScore)} " +
-                        "kind=${it.candidate.syncKind} cacheRefresh=${refreshAfterMs}ms"
-                } ?: "selected=none"
+                        "kind=${it.candidate.syncKind} mode=${if (preferWordSync) "karaoke" else "standard"} " +
+                        "cacheRefresh=${refreshAfterMs}ms"
+                } ?: "selected=none mode=${if (preferWordSync) "karaoke" else "standard"}"
             )
         }
 
@@ -493,8 +519,9 @@ class MediaTracker private constructor(context: Context) {
         val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
         if (!hasRealText) return null
 
-        val syncKind = when (result.lyricsType) {
-            3 -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+        val syncKind = when {
+            result.lyricsType == 3 && result.lines.any { it.words.isNotEmpty() } ->
+                LyricsProviderCandidate.SyncKind.WORD_SYNC
             else -> LyricsProviderCandidate.SyncKind.LINE_SYNC
         }
 
@@ -596,6 +623,11 @@ class MediaTracker private constructor(context: Context) {
         return null
     }
 
+    private fun handleKaraokePreferenceChanged() {
+        val track = _state.value.track ?: return
+        fetchLyrics(track)
+    }
+
     private fun handleTranslationPreferenceChanged() {
         translationJob?.cancel()
 
@@ -685,6 +717,7 @@ class MediaTracker private constructor(context: Context) {
         private const val PROVISIONAL_CACHE_REFRESH_MS = 15L * 60 * 1000
         private const val PROVIDER_RESOLVER_TAG = "ProviderResolver"
         private const val TRANSLATION_ENABLED_KEY = "translation_enabled"
+        private const val AA_KARAOKE_ENABLED_KEY = "aa_karaoke_enabled"
 
         @Volatile
         private var instance: MediaTracker? = null

@@ -9,9 +9,9 @@ import kotlin.math.abs
  * A normalized candidate returned by a lyrics provider.
  *
  * Provider-specific search logic is still responsible for finding a plausible
- * song. This model lets Auto Lyrics compare the final LRCLIB and PetitLyrics
- * candidates with one scoring system instead of treating either provider as an
- * unconditional first choice.
+ * song. This model lets Auto Lyrics compare the final provider candidates with
+ * one scoring system instead of treating any provider as an unconditional first
+ * choice.
  */
 data class LyricsProviderCandidate(
     val provider: String,
@@ -51,23 +51,51 @@ object LyricsProviderResolver {
     private const val QUALITY_WEIGHT = 0.10
     private const val SOURCE_WEIGHT = 0.08
 
+    // Karaoke mode may prefer a real word-timed candidate over the normal winner,
+    // but only when recording identity and payload quality remain near-equivalent.
+    // This prevents a weaker live/remix/mismatched result from winning merely
+    // because it happens to contain word timestamps.
+    private const val KARAOKE_METADATA_TOLERANCE = 0.03
+    private const val KARAOKE_QUALITY_TOLERANCE = 0.05
+
     private val JAPANESE_SCRIPT = Regex("[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]")
     private val LATIN_SCRIPT = Regex("[A-Za-z]")
 
     fun selectBest(
         track: TrackInfo,
-        candidates: Collection<LyricsProviderCandidate>
+        candidates: Collection<LyricsProviderCandidate>,
+        preferWordSync: Boolean = false
     ): LyricsProviderScore? {
         val scored = scoreCandidates(track, candidates)
+        val synced = scored.filter { it.candidate.status == LyricsStatus.FOUND }
+        val standardBest = synced.maxByOrNull { it.finalScore }
+
+        if (standardBest != null) {
+            if (preferWordSync) {
+                val karaokeBest = synced
+                    .asSequence()
+                    .filter { hasUsableWordTiming(it.candidate) }
+                    .filter {
+                        it.metadataScore >= standardBest.metadataScore - KARAOKE_METADATA_TOLERANCE &&
+                            it.qualityScore >= standardBest.qualityScore - KARAOKE_QUALITY_TOLERANCE
+                    }
+                    .maxByOrNull { it.finalScore }
+
+                if (karaokeBest != null) return karaokeBest
+            }
+            return standardBest
+        }
 
         // A synchronized candidate always beats plain lyrics. Plain LRCLIB text
-        // remains a last-resort fallback when neither provider has usable timing.
+        // remains a last-resort fallback when no provider has usable timing.
         return scored
-            .filter { it.candidate.status == LyricsStatus.FOUND }
+            .filter { it.candidate.status == LyricsStatus.PLAIN_ONLY }
             .maxByOrNull { it.finalScore }
-            ?: scored
-                .filter { it.candidate.status == LyricsStatus.PLAIN_ONLY }
-                .maxByOrNull { it.finalScore }
+    }
+
+    internal fun hasUsableWordTiming(candidate: LyricsProviderCandidate): Boolean {
+        return candidate.syncKind == LyricsProviderCandidate.SyncKind.WORD_SYNC &&
+            candidate.lines.any { it.words.isNotEmpty() }
     }
 
     fun scoreCandidates(
