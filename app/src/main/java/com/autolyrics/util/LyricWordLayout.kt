@@ -3,7 +3,6 @@ package com.autolyrics.util
 import com.autolyrics.model.LyricLine
 import java.text.BreakIterator
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * Reconstructs separators around timed lyric tokens from the provider's original
@@ -149,14 +148,22 @@ object LyricWordLayout {
         }
 
         // If provider token strings cannot be aligned verbatim (case, punctuation,
-        // or Unicode-normalization differences), keep karaoke available by mapping
-        // token order onto the provider line's lexical ranges. First and last
-        // tokens stay anchored to the first and last visible ranges, while finer
-        // token streams naturally collapse onto shared display ranges.
-        val fraction = activeTokenIndex.toFloat() / line.words.lastIndex.toFloat()
-        val rangeIndex = (fraction * ranges.lastIndex).roundToInt()
-            .coerceIn(0, ranges.lastIndex)
-        return ranges[rangeIndex]
+        // or Unicode-normalization differences), estimate each token's position
+        // from cumulative token text length. This keeps fragments of the same word
+        // together more reliably than mapping only by token index.
+        val tokenLengths = line.words.map { it.text.length.coerceAtLeast(1) }
+        val totalLength = tokenLengths.sum().coerceAtLeast(1)
+        val consumedBefore = tokenLengths.take(activeTokenIndex).sum()
+        val tokenMidpoint = consumedBefore + tokenLengths[activeTokenIndex] / 2f
+        val fraction = (tokenMidpoint / totalLength).coerceIn(0f, 1f)
+        val visibleStart = ranges.first().start.toFloat()
+        val visibleEnd = ranges.last().end.toFloat()
+        val target = visibleStart + (visibleEnd - visibleStart) * fraction
+
+        return ranges.minWithOrNull(
+            compareBy<DisplayRange> { pointDistance(target, it) }
+                .thenBy { if (it.end.toFloat() <= target) 0 else 1 }
+        )
     }
 
     private fun lexicalRanges(text: String): List<DisplayRange> {
@@ -205,6 +212,14 @@ object LyricWordLayout {
             token.end <= range.start -> range.start - token.end
             range.end <= token.start -> token.start - range.end
             else -> 0
+        }
+    }
+
+    private fun pointDistance(point: Float, range: DisplayRange): Float {
+        return when {
+            point < range.start -> range.start - point
+            point > range.end -> point - range.end
+            else -> 0f
         }
     }
 
