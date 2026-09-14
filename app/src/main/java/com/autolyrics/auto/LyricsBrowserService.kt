@@ -13,6 +13,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media.MediaBrowserServiceCompat
+import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
@@ -325,8 +326,26 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         }
         items.add(buildTextItem("more_sync", "Lyrics", subtitle = syncStatus))
 
-        state.detectedLanguage?.takeIf { it.isNotBlank() }?.let { language ->
-            items.add(buildTextItem("more_language", "Language", subtitle = language.uppercase()))
+        val sourceLanguage = TranslationLanguages.normalizeLanguageTag(state.detectedLanguage)
+        if (sourceLanguage != null) {
+            if (state.translatedLines != null) {
+                val targetLanguage = selectedTranslationTarget()
+                items.add(
+                    buildTextItem(
+                        "more_translation",
+                        "Translation",
+                        subtitle = "${sourceLanguage.uppercase()} → ${targetLanguage.uppercase()}"
+                    )
+                )
+            } else {
+                items.add(
+                    buildTextItem(
+                        "more_language",
+                        "Language",
+                        subtitle = sourceLanguage.uppercase()
+                    )
+                )
+            }
         }
         if (track.durationMs > 0) {
             items.add(buildTextItem("more_duration", "Duration", subtitle = formatTime(track.durationMs)))
@@ -461,14 +480,32 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             .substringBefore("(")
             .trim()
         val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""
-        val lang = state.detectedLanguage?.uppercase()
-        val langSuffix = if (lang != null) " · $lang" else ""
+        val sourceLanguage = TranslationLanguages.normalizeLanguageTag(state.detectedLanguage)
+        val languageSuffix = if (sourceLanguage != null) {
+            if (state.translatedLines != null) {
+                " · ${sourceLanguage.uppercase()}→${selectedTranslationTarget().uppercase()}"
+            } else {
+                " · ${sourceLanguage.uppercase()}"
+            }
+        } else {
+            ""
+        }
 
         return when (state.status) {
-            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$langSuffix"
-            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$langSuffix"
+            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$languageSuffix"
+            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$languageSuffix"
             else -> "⟳ Sync"
         }
+    }
+
+    private fun selectedTranslationTarget(): String {
+        val prefs = getSharedPreferences("auto_lyrics_prefs", MODE_PRIVATE)
+        return TranslationLanguages.normalizeTargetLanguage(
+            prefs.getString(
+                TranslationLanguages.TARGET_LANGUAGE_PREF_KEY,
+                TranslationLanguages.DEFAULT_TARGET_LANGUAGE
+            )
+        )
     }
 
     // --- Karaoke helpers ---
