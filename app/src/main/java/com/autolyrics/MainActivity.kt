@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val btnSans = findViewById<Button>(R.id.btn_font_sans)
-        val btnSerif = findViewById<Button>(R.id.btn_serif)
+        val btnSerif = findViewById<Button>(R.id.btn_font_serif)
         val btnMono = findViewById<Button>(R.id.btn_font_mono)
         val btnCursive = findViewById<Button>(R.id.btn_font_cursive)
 
