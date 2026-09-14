@@ -19,6 +19,17 @@ class LrcParserTest {
     }
 
     @Test
+    fun enhancedLrcIgnoresFormattingSpaceBeforeFirstToken() {
+        val lrc = "[00:01.00] <00:01.05>Hello <00:01.50>world"
+
+        val line = LrcParser.parseKaraoke(lrc).single()
+
+        assertEquals("Hello world", line.text)
+        assertEquals(listOf("Hello ", "world"), line.words.map { it.text })
+        assertEquals(1_050L, line.words.first().timeMs)
+    }
+
+    @Test
     fun enhancedLrcKeepsJapaneseCharacterTokensWithoutInventingSpaces() {
         val lrc = "[00:03.00]<00:03.00>君<00:03.15>を<00:03.30>忘<00:03.45>れ<00:03.60>な<00:03.75>い"
 
