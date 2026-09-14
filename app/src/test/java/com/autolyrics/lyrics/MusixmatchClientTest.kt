@@ -1,48 +1,109 @@
 package com.autolyrics.lyrics
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MusixmatchClientTest {
 
     @Test
-    fun parsesTrackSearchMetadata() {
+    fun parsesAnonymousToken() {
+        val json = """
+            {
+              "message": {
+                "header": {"status_code": 200},
+                "body": {"user_token": "abc123token"}
+              }
+            }
+        """.trimIndent()
+
+        assertEquals("abc123token", MusixmatchClient.parseTokenResponse(json))
+    }
+
+    @Test
+    fun rejectsUpgradeOnlyToken() {
+        val json = """
+            {
+              "message": {
+                "header": {"status_code": 200},
+                "body": {"user_token": "UpgradeOnly-token"}
+              }
+            }
+        """.trimIndent()
+
+        assertEquals(null, MusixmatchClient.parseTokenResponse(json))
+    }
+
+    @Test
+    fun parsesMacroTrackAndLineSubtitle() {
         val json = """
             {
               "message": {
                 "header": {"status_code": 200},
                 "body": {
-                  "track_list": [
-                    {
-                      "track": {
-                        "track_id": 123,
-                        "commontrack_id": 456,
-                        "track_name": "Hey Jude",
-                        "artist_name": "The Beatles",
-                        "album_name": "1",
-                        "track_length": 431,
-                        "has_richsync": 1,
-                        "has_lyrics": 1
+                  "macro_calls": {
+                    "matcher.track.get": {
+                      "message": {
+                        "header": {"status_code": 200},
+                        "body": {
+                          "track": {
+                            "track_id": 123,
+                            "commontrack_id": 456,
+                            "track_name": "Hey Jude",
+                            "artist_name": "The Beatles",
+                            "album_name": "1",
+                            "track_length": 431,
+                            "has_richsync": 1,
+                            "instrumental": 0
+                          }
+                        }
+                      }
+                    },
+                    "track.subtitles.get": {
+                      "message": {
+                        "header": {"status_code": 200},
+                        "body": {
+                          "subtitle_list": [
+                            {
+                              "subtitle": {
+                                "subtitle_body": "[00:01.00]Hey Jude\n[00:03.00]Don't make it bad"
+                              }
+                            }
+                          ]
+                        }
                       }
                     }
-                  ]
+                  }
                 }
               }
             }
         """.trimIndent()
 
-        val result = MusixmatchClient.parseSearchResponse(json)
+        val result = MusixmatchClient.parseMacroResponse(json)
 
-        assertEquals(1, result.size)
-        assertEquals(123L, result[0].trackId)
-        assertEquals(456L, result[0].commonTrackId)
-        assertEquals("Hey Jude", result[0].title)
-        assertEquals("The Beatles", result[0].artist)
-        assertEquals(431.0, result[0].durationSec ?: 0.0, 0.001)
-        assertTrue(result[0].hasRichSync)
-        assertTrue(result[0].hasLyrics)
+        assertNotNull(result)
+        assertEquals(123L, result!!.candidate.trackId)
+        assertEquals(456L, result.candidate.commonTrackId)
+        assertEquals("Hey Jude", result.candidate.title)
+        assertEquals("The Beatles", result.candidate.artist)
+        assertEquals("1", result.candidate.album)
+        assertEquals(431.0, result.candidate.durationSec ?: 0.0, 0.001)
+        assertTrue(result.candidate.hasRichSync)
+        assertEquals("[00:01.00]Hey Jude\n[00:03.00]Don't make it bad", result.subtitleBody)
+    }
+
+    @Test
+    fun parsesLineSubtitleIntoTimedLines() {
+        val lines = MusixmatchClient.parseSubtitleBody(
+            "[00:01.00]Line one\n[00:03.25]Line two"
+        )
+
+        assertEquals(2, lines.size)
+        assertEquals(1_000L, lines[0].timeMs)
+        assertEquals("Line one", lines[0].text)
+        assertEquals(3_250L, lines[1].timeMs)
+        assertEquals("Line two", lines[1].text)
     }
 
     @Test
@@ -94,26 +155,5 @@ class MusixmatchClientTest {
         assertEquals(1, lines.size)
         assertEquals("君を忘れない", lines[0].text)
         assertTrue(lines[0].words.isEmpty())
-    }
-
-    @Test
-    fun stripsMusixmatchPlainLyricsFooter() {
-        val json = """
-            {
-              "message": {
-                "header": {"status_code": 200},
-                "body": {
-                  "lyrics": {
-                    "lyrics_body": "Line one\nLine two\n******* This Lyrics is NOT for Commercial use *******"
-                  }
-                }
-              }
-            }
-        """.trimIndent()
-
-        val lines = MusixmatchClient.parsePlainLyricsResponse(json)
-
-        assertEquals(listOf("Line one", "Line two"), lines.map { it.text })
-        assertFalse(lines.any { it.text.contains("Commercial use") })
     }
 }
