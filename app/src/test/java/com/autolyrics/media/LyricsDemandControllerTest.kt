@@ -10,7 +10,7 @@ import org.junit.Test
 class LyricsDemandControllerTest {
 
     private val changes = mutableListOf<Boolean>()
-    private val listener: (Boolean) -> Unit = changes::add
+    private val listener: (Boolean) -> Unit = { value -> changes.add(value) }
 
     @Before
     fun setUp() {
