@@ -24,7 +24,7 @@ object LyricWordLayout {
 
         for (word in words) {
             val index = line.text.indexOf(word.text, startIndex = cursor)
-            if (index < cursor) return fallback(line)
+            if (index < 0) return fallback(line)
 
             prefixes += line.text.substring(cursor, index)
             cursor = index + word.text.length
@@ -58,7 +58,7 @@ object LyricWordLayout {
     }
 
     private fun fallback(line: LyricLine): Layout {
-        val separator = if (line.text.any(Char::isWhitespace)) " " else ""
+        val separator = if (line.text.any { it.isWhitespace() }) " " else ""
         return Layout(
             prefixes = line.words.indices.map { index ->
                 if (index == 0) "" else separator
