@@ -1,58 +1,47 @@
 package com.autolyrics.lyrics
 
+import android.content.SharedPreferences
 import android.util.Log
 import com.autolyrics.BuildConfig
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
-import java.util.Base64
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.TimeUnit
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.math.roundToLong
 
 /**
- * Musixmatch provider using the web-desktop API flow.
+ * Musixmatch provider using the current anonymous-token web/desktop flow.
  *
- * The implementation mirrors the companion Python prototype:
- *  - signed requests to apic-desktop.musixmatch.com
- *  - track.search for discovery
- *  - track.richsync.get for synchronized lyrics
- *  - track.lyrics.get as a plain-text fallback
+ * Flow:
+ *  1. token.get -> anonymous user_token, cached in SharedPreferences.
+ *  2. macro.subtitles.get -> metadata match + line-synced LRC subtitle.
+ *  3. track.richsync.get -> optional per-word timing when has_richsync=1.
  *
- * Musixmatch does not publish this web-desktop flow as a stable public API, so
- * failures are intentionally isolated to this provider and never prevent the
- * other lyrics providers from running.
+ * This is an unofficial endpoint. Failures remain isolated to this provider.
  */
 object MusixmatchClient {
 
     private const val TAG = "Musixmatch"
     private const val BASE_URL = "https://apic-desktop.musixmatch.com/ws/1.1/"
-    private const val SEARCH_PAGE_URL = "https://www.musixmatch.com/search"
     private const val APP_ID = "web-desktop-app-v1.0"
-    private const val SEARCH_PAGE_SIZE = 15
     private const val MIN_PROVIDER_METADATA_SCORE = 0.70
 
-    // Known web-desktop fallback used by the reference Python implementation.
-    // If Musixmatch rotates it, a failed signed request triggers one live refresh
-    // from the current web bundle before this provider gives up.
-    private const val FALLBACK_SECRET = "al46t38ylg78ty4hls2345"
+    private const val TOKEN_PREF_KEY = "musixmatch_user_token"
+    private const val TOKEN_TIME_PREF_KEY = "musixmatch_user_token_time_ms"
+    private const val TOKEN_TTL_MS = 6L * 60L * 60L * 1000L
 
     private const val USER_AGENT =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -60,11 +49,13 @@ object MusixmatchClient {
         .callTimeout(4, TimeUnit.SECONDS)
         .build()
 
-    @Volatile
-    private var cachedSecret: String = FALLBACK_SECRET
+    private val tokenLock = Any()
 
     @Volatile
-    private var attemptedSecretRefresh = false
+    private var cachedToken: String? = null
+
+    @Volatile
+    private var cachedTokenAtMs: Long = 0L
 
     data class MusixmatchResult(
         val lines: List<LyricLine>,
@@ -72,7 +63,8 @@ object MusixmatchClient {
         val matchedArtist: String,
         val matchedAlbum: String,
         val matchedDurationSec: Double?,
-        val isRichSync: Boolean
+        val isRichSync: Boolean,
+        val artistQueryCorroborated: Boolean = false
     )
 
     internal data class TrackCandidate(
@@ -83,114 +75,281 @@ object MusixmatchClient {
         val album: String,
         val durationSec: Double?,
         val hasRichSync: Boolean,
-        val hasLyrics: Boolean
+        val instrumental: Boolean
     )
 
-    private data class RankedCandidate(
+    internal data class MacroMatch(
         val candidate: TrackCandidate,
-        val score: Double,
-        val index: Int
+        val subtitleBody: String
     )
 
-    fun getLyrics(track: TrackInfo): MusixmatchResult? {
+    private data class HttpJsonResponse(
+        val httpCode: Int,
+        val json: JsonObject?
+    )
+
+    fun getLyrics(
+        track: TrackInfo,
+        prefs: SharedPreferences? = null
+    ): MusixmatchResult? {
         if (track.title.isBlank()) return null
 
-        val discovered = LinkedHashMap<String, TrackCandidate>()
-        val artistSearches = listOf(
-            track.artist.takeIf { it.isNotBlank() },
-            null
-        ).distinct()
+        val macro = fetchMacro(track, prefs) ?: return null
+        val match = parseMacroResponse(macro.toString()) ?: return null
+        val candidate = match.candidate
 
-        for (artist in artistSearches) {
-            searchTracks(track.title, artist).forEach { candidate ->
-                val key = candidate.trackId?.let { "track:$it" }
-                    ?: candidate.commonTrackId?.let { "common:$it" }
-                    ?: listOf(candidate.title, candidate.artist, candidate.album)
-                        .joinToString("|")
-                discovered.putIfAbsent(key, candidate)
-            }
+        logMatchDiagnostics(track, candidate)
 
-            if (rankCandidates(track, discovered.values.toList()).isNotEmpty()) {
-                break
+        if (candidate.instrumental) {
+            debugLog("macro match rejected: instrumental")
+            return null
+        }
+
+        val normalized = normalizedCandidate(
+            candidate = candidate,
+            artistQueryCorroborated = track.artist.isNotBlank()
+        )
+        val metadataScore = LyricsProviderResolver.metadataScore(track, normalized)
+        if (metadataScore == null || metadataScore < MIN_PROVIDER_METADATA_SCORE) {
+            debugLog("macro match rejected: metadata=${scoreText(metadataScore)}")
+            return null
+        }
+
+        if (candidate.hasRichSync && candidate.commonTrackId != null) {
+            val richSync = fetchRichSync(candidate, prefs)
+            if (richSync.isNotEmpty()) {
+                debugLog("richsync accepted lines=${richSync.size}")
+                return MusixmatchResult(
+                    lines = richSync,
+                    matchedTitle = candidate.title,
+                    matchedArtist = candidate.artist,
+                    matchedAlbum = candidate.album,
+                    matchedDurationSec = candidate.durationSec,
+                    isRichSync = true,
+                    artistQueryCorroborated = track.artist.isNotBlank()
+                )
             }
         }
 
-        logCandidateDiagnostics(track, discovered.values.toList())
-        val ranked = rankCandidates(track, discovered.values.toList())
-        debugLog("search candidates=${discovered.size}, acceptable=${ranked.size}")
-
-        for (rankedCandidate in ranked.take(3)) {
-            val candidate = rankedCandidate.candidate
-
-            if (candidate.hasRichSync) {
-                val richSync = fetchRichSync(candidate)
-                if (richSync.isNotEmpty()) {
-                    return MusixmatchResult(
-                        lines = richSync,
-                        matchedTitle = candidate.title,
-                        matchedArtist = candidate.artist,
-                        matchedAlbum = candidate.album,
-                        matchedDurationSec = candidate.durationSec,
-                        isRichSync = true
-                    )
-                }
-            }
-
-            if (candidate.hasLyrics) {
-                val plain = fetchPlainLyrics(candidate)
-                if (plain.isNotEmpty()) {
-                    return MusixmatchResult(
-                        lines = plain,
-                        matchedTitle = candidate.title,
-                        matchedArtist = candidate.artist,
-                        matchedAlbum = candidate.album,
-                        matchedDurationSec = candidate.durationSec,
-                        isRichSync = false
-                    )
-                }
-            }
+        val lineSync = parseSubtitleBody(match.subtitleBody)
+        if (lineSync.isNotEmpty()) {
+            debugLog("line subtitle accepted lines=${lineSync.size}")
+            return MusixmatchResult(
+                lines = lineSync,
+                matchedTitle = candidate.title,
+                matchedArtist = candidate.artist,
+                matchedAlbum = candidate.album,
+                matchedDurationSec = candidate.durationSec,
+                isRichSync = false,
+                artistQueryCorroborated = track.artist.isNotBlank()
+            )
         }
 
+        debugLog("macro match had no usable synced lyrics")
         return null
     }
 
-    internal fun parseSearchResponse(json: String): List<TrackCandidate> {
-        val root = parseJsonObject(json) ?: return emptyList()
-        if (apiStatus(root) != 200) return emptyList()
+    private fun fetchMacro(
+        track: TrackInfo,
+        prefs: SharedPreferences?
+    ): JsonObject? {
+        val params = linkedMapOf(
+            "namespace" to "lyrics_richsynched",
+            "subtitle_format" to "lrc",
+            "q_track" to track.title,
+            "q_artist" to track.artist,
+            "q_album" to track.album
+        )
+        if (track.durationMs > 0L) {
+            params["q_duration"] = (track.durationMs / 1000.0).roundToLong().toString()
+        }
 
-        val trackList = root.getAsJsonObject("message")
-            ?.getAsJsonObject("body")
-            ?.getAsJsonArray("track_list")
-            ?: return emptyList()
+        debugLog(
+            "macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
+                "q_album='${track.album}' q_duration='${params["q_duration"].orEmpty()}'"
+        )
 
-        val result = ArrayList<TrackCandidate>(trackList.size())
-        for (entry in trackList) {
-            val track = entry.asJsonObject?.getAsJsonObject("track") ?: continue
-            val title = track.string("track_name")
-            if (title.isBlank()) continue
+        return authenticatedRequest("macro.subtitles.get", params, prefs)
+    }
 
-            result += TrackCandidate(
-                trackId = track.longOrNull("track_id"),
-                commonTrackId = track.longOrNull("commontrack_id"),
-                title = title,
-                artist = track.string("artist_name"),
-                album = track.string("album_name"),
-                durationSec = track.doubleOrNull("track_length"),
-                hasRichSync = track.intOrNull("has_richsync") == 1,
-                hasLyrics = track.intOrNull("has_lyrics") == 1
+    private fun fetchRichSync(
+        candidate: TrackCandidate,
+        prefs: SharedPreferences?
+    ): List<LyricLine> {
+        val commonTrackId = candidate.commonTrackId ?: return emptyList()
+        val response = authenticatedRequest(
+            endpoint = "track.richsync.get",
+            params = linkedMapOf("commontrack_id" to commonTrackId.toString()),
+            prefs = prefs
+        ) ?: return emptyList()
+
+        return parseRichSyncResponse(response.toString())
+    }
+
+    private fun authenticatedRequest(
+        endpoint: String,
+        params: LinkedHashMap<String, String>,
+        prefs: SharedPreferences?
+    ): JsonObject? {
+        var token = getToken(prefs, force = false) ?: return null
+        var response = request(
+            endpoint = endpoint,
+            params = LinkedHashMap(params).apply { put("usertoken", token) }
+        )
+
+        if (response.httpCode == 401 || apiStatus(response.json) == 401) {
+            debugLog("$endpoint token rejected; refreshing once")
+            token = getToken(prefs, force = true) ?: return null
+            response = request(
+                endpoint = endpoint,
+                params = LinkedHashMap(params).apply { put("usertoken", token) }
             )
         }
-        return result
+
+        return response.json?.takeIf { apiStatus(it) == 200 }
+    }
+
+    private fun getToken(
+        prefs: SharedPreferences?,
+        force: Boolean
+    ): String? {
+        synchronized(tokenLock) {
+            val now = System.currentTimeMillis()
+
+            if (cachedToken == null && prefs != null) {
+                cachedToken = prefs.getString(TOKEN_PREF_KEY, null)
+                cachedTokenAtMs = prefs.getLong(TOKEN_TIME_PREF_KEY, 0L)
+            }
+
+            val memoryToken = cachedToken
+            if (
+                !force &&
+                !memoryToken.isNullOrBlank() &&
+                now - cachedTokenAtMs in 0 until TOKEN_TTL_MS
+            ) {
+                debugLog("token cache hit")
+                return memoryToken
+            }
+
+            debugLog(if (force) "token.get refresh" else "token.get")
+            val response = request(
+                endpoint = "token.get",
+                params = linkedMapOf("t" to now.toString())
+            )
+            val token = parseTokenResponse(response.json?.toString().orEmpty())
+            if (!token.isNullOrBlank()) {
+                cachedToken = token
+                cachedTokenAtMs = now
+                prefs?.edit()
+                    ?.putString(TOKEN_PREF_KEY, token)
+                    ?.putLong(TOKEN_TIME_PREF_KEY, now)
+                    ?.apply()
+                debugLog("token cached")
+                return token
+            }
+
+            // If refresh was rate-limited but an older token exists, give it one
+            // last chance. authenticatedRequest() will refresh again only on 401.
+            return cachedToken
+        }
+    }
+
+    private fun request(
+        endpoint: String,
+        params: LinkedHashMap<String, String>
+    ): HttpJsonResponse {
+        val url = buildUrl(endpoint, params)
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Cookie", "x-mxm-token-guid=")
+            .build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                val json = parseJsonObject(body)
+                debugLog(
+                    "${response.code} api=${apiStatus(json) ?: "-"} $endpoint"
+                )
+                HttpJsonResponse(response.code, json)
+            }
+        } catch (e: Exception) {
+            debugLog("$endpoint failed: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
+            HttpJsonResponse(-1, null)
+        }
+    }
+
+    private fun buildUrl(
+        endpoint: String,
+        params: LinkedHashMap<String, String>
+    ): String {
+        val all = linkedMapOf(
+            "app_id" to APP_ID,
+            "format" to "json"
+        )
+        all.putAll(params)
+
+        val query = all.entries.joinToString("&") { (key, value) ->
+            "${urlEncode(key)}=${urlEncode(value)}"
+        }
+        return "$BASE_URL$endpoint?$query"
+    }
+
+    internal fun parseTokenResponse(json: String): String? {
+        val root = parseJsonObject(json) ?: return null
+        if (apiStatus(root) != 200) return null
+        val token = root.getAsJsonObject("message")
+            ?.getAsJsonObject("body")
+            ?.string("user_token")
+            .orEmpty()
+        return token.takeIf { it.isNotBlank() && !it.startsWith("UpgradeOnly") }
+    }
+
+    internal fun parseMacroResponse(json: String): MacroMatch? {
+        val root = parseJsonObject(json) ?: return null
+        if (apiStatus(root) != 200) return null
+
+        val matcherCall = deepFind(root, "matcher.track.get")
+        val track = deepFind(matcherCall ?: root, "track")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: return null
+
+        val title = track.string("track_name")
+        if (title.isBlank()) return null
+
+        val candidate = TrackCandidate(
+            trackId = track.longOrNull("track_id"),
+            commonTrackId = track.longOrNull("commontrack_id"),
+            title = title,
+            artist = track.string("artist_name"),
+            album = track.string("album_name"),
+            durationSec = track.doubleOrNull("track_length"),
+            hasRichSync = track.intOrNull("has_richsync") == 1,
+            instrumental = track.intOrNull("instrumental") == 1
+        )
+
+        val subtitleBody = deepFind(root, "subtitle_body")
+            ?.asStringOrNull()
+            .orEmpty()
+
+        return MacroMatch(candidate, subtitleBody)
+    }
+
+    internal fun parseSubtitleBody(subtitleBody: String): List<LyricLine> {
+        if (subtitleBody.isBlank()) return emptyList()
+        return LrcParser.parse(subtitleBody)
+            .filter { it.timeMs >= 0L }
+            .distinctBy { it.timeMs to it.text }
     }
 
     internal fun parseRichSyncResponse(json: String): List<LyricLine> {
         val root = parseJsonObject(json) ?: return emptyList()
         if (apiStatus(root) != 200) return emptyList()
 
-        val richSyncBody = root.getAsJsonObject("message")
-            ?.getAsJsonObject("body")
-            ?.getAsJsonObject("richsync")
-            ?.string("richsync_body")
+        val richSyncBody = deepFind(root, "richsync_body")
+            ?.asStringOrNull()
             .orEmpty()
         if (richSyncBody.isBlank()) return emptyList()
 
@@ -202,9 +361,9 @@ object MusixmatchClient {
                 val text = line.string("x").ifBlank { "♪" }
                 val startMs = secondsToMs(startSec)
 
-                // The current renderer inserts a separator between LyricWord items.
-                // RichSync for languages without spaces (notably Japanese) is kept
-                // line-synced here to avoid visually corrupting the original text.
+                // MainActivity currently inserts a separator between LyricWord
+                // items. For no-space languages keep exact line text and expose
+                // line timing until the renderer supports chunk-preserving joins.
                 val words = if (text.any { it.isWhitespace() }) {
                     parseRichSyncWords(line, startSec)
                 } else {
@@ -225,29 +384,10 @@ object MusixmatchClient {
         }
     }
 
-    internal fun parsePlainLyricsResponse(json: String): List<LyricLine> {
-        val root = parseJsonObject(json) ?: return emptyList()
-        if (apiStatus(root) != 200) return emptyList()
-
-        val body = root.getAsJsonObject("message")
-            ?.getAsJsonObject("body")
-            ?.getAsJsonObject("lyrics")
-            ?.string("lyrics_body")
-            .orEmpty()
-        if (body.isBlank()) return emptyList()
-
-        return body.lineSequence()
-            .map { it.trimEnd() }
-            .takeWhile { line ->
-                !line.startsWith("*******") &&
-                    !line.contains("This Lyrics is NOT for Commercial use", ignoreCase = true)
-            }
-            .filter { it.isNotBlank() }
-            .map { LyricLine(0L, it) }
-            .toList()
-    }
-
-    private fun parseRichSyncWords(line: JsonObject, lineStartSec: Double): List<LyricWord> {
+    private fun parseRichSyncWords(
+        line: JsonObject,
+        lineStartSec: Double
+    ): List<LyricWord> {
         val chunks = line.getAsJsonArray("l") ?: return emptyList()
         val words = mutableListOf<LyricWord>()
 
@@ -271,77 +411,10 @@ object MusixmatchClient {
         return words
     }
 
-    private fun isPunctuationOnly(value: String): Boolean {
-        return value.isNotBlank() && value.none { it.isLetterOrDigit() }
-    }
-
-    private fun searchTracks(title: String, artist: String?): List<TrackCandidate> {
-        val params = linkedMapOf(
-            "q_track" to title,
-            "f_has_lyrics" to "1",
-            "page_size" to SEARCH_PAGE_SIZE.toString(),
-            "page" to "1"
-        )
-        artist?.takeIf { it.isNotBlank() }?.let { params["q_artist"] = it }
-
-        debugLog(
-            "track.search q_track='$title' q_artist='${artist.orEmpty()}'"
-        )
-
-        val response = makeRequest(
-            endpoint = "track.search",
-            params = params
-        ) ?: return emptyList()
-
-        return parseSearchResponse(response)
-    }
-
-    private fun fetchRichSync(candidate: TrackCandidate): List<LyricLine> {
-        val idParam = when {
-            candidate.trackId != null -> "track_id" to candidate.trackId.toString()
-            candidate.commonTrackId != null -> "commontrack_id" to candidate.commonTrackId.toString()
-            else -> return emptyList()
-        }
-
-        val params = linkedMapOf(idParam)
-        candidate.durationSec?.takeIf { it > 0.0 }?.let { duration ->
-            params["f_richsync_length"] = duration.roundToLong().toString()
-            params["f_richsync_length_max_deviation"] = "10"
-        }
-
-        val response = makeRequest("track.richsync.get", params) ?: return emptyList()
-        return parseRichSyncResponse(response)
-    }
-
-    private fun fetchPlainLyrics(candidate: TrackCandidate): List<LyricLine> {
-        val params = linkedMapOf<String, String>()
-        when {
-            candidate.trackId != null -> params["track_id"] = candidate.trackId.toString()
-            else -> return emptyList()
-        }
-
-        val response = makeRequest("track.lyrics.get", params) ?: return emptyList()
-        return parsePlainLyricsResponse(response)
-    }
-
-    private fun rankCandidates(
-        track: TrackInfo,
-        candidates: List<TrackCandidate>
-    ): List<RankedCandidate> {
-        return candidates.mapIndexedNotNull { index, candidate ->
-            val normalized = normalizedCandidate(candidate)
-            val score = LyricsProviderResolver.metadataScore(track, normalized)
-                ?: return@mapIndexedNotNull null
-            if (score < MIN_PROVIDER_METADATA_SCORE) return@mapIndexedNotNull null
-            RankedCandidate(candidate, score, index)
-        }.sortedWith(
-            compareByDescending<RankedCandidate> { it.score }
-                .thenByDescending { it.candidate.hasRichSync }
-                .thenBy { it.index }
-        )
-    }
-
-    private fun normalizedCandidate(candidate: TrackCandidate): LyricsProviderCandidate {
+    private fun normalizedCandidate(
+        candidate: TrackCandidate,
+        artistQueryCorroborated: Boolean
+    ): LyricsProviderCandidate {
         return LyricsProviderCandidate(
             provider = "Musixmatch",
             title = candidate.title,
@@ -354,208 +427,83 @@ object MusixmatchClient {
             syncKind = if (candidate.hasRichSync) {
                 LyricsProviderCandidate.SyncKind.WORD_SYNC
             } else {
-                LyricsProviderCandidate.SyncKind.PLAIN
-            }
+                LyricsProviderCandidate.SyncKind.LINE_SYNC
+            },
+            artistQueryCorroborated = artistQueryCorroborated
         )
     }
 
-    private fun logCandidateDiagnostics(
+    private fun logMatchDiagnostics(
         track: TrackInfo,
-        candidates: List<TrackCandidate>
+        candidate: TrackCandidate
     ) {
         if (!BuildConfig.DEBUG) return
 
         val targetDurationSec = track.durationMs
             .takeIf { it > 0L }
             ?.div(1000.0)
+        val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
+        val artistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
+            LrcLibClient.artistSimilarity(
+                left = track.artist,
+                right = candidate.artist,
+                allowContributorComponents = titleScore >= 0.95
+            )
+        } else {
+            null
+        }
+        val albumScore = if (track.album.isNotBlank() && candidate.album.isNotBlank()) {
+            LrcLibClient.stringSimilarity(track.album, candidate.album)
+        } else {
+            null
+        }
+        val durationScore = if (targetDurationSec != null && candidate.durationSec != null) {
+            LrcLibClient.durationSimilarity(targetDurationSec.toInt(), candidate.durationSec)
+        } else {
+            null
+        }
+        val metadata = LyricsProviderResolver.metadataScore(
+            track,
+            normalizedCandidate(candidate, track.artist.isNotBlank())
+        )
+
         debugLog(
             "target title='${track.title}' artist='${track.artist}' album='${track.album}' " +
                 "duration=${scoreText(targetDurationSec)}s"
         )
-
-        candidates.forEachIndexed { index, candidate ->
-            val titleCompatible = LrcLibClient.versionsCompatible(track.title, candidate.title)
-            val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
-            val artistScore = if (track.artist.isNotBlank() && candidate.artist.isNotBlank()) {
-                LrcLibClient.artistSimilarity(
-                    left = track.artist,
-                    right = candidate.artist,
-                    allowContributorComponents = titleScore >= 0.95
-                )
-            } else {
-                null
-            }
-            val albumScore = if (track.album.isNotBlank() && candidate.album.isNotBlank()) {
-                LrcLibClient.stringSimilarity(track.album, candidate.album)
-            } else {
-                null
-            }
-            val durationScore = if (targetDurationSec != null && candidate.durationSec != null) {
-                LrcLibClient.durationSimilarity(targetDurationSec.toInt(), candidate.durationSec)
-            } else {
-                null
-            }
-            val metadataScore = LyricsProviderResolver.metadataScore(
-                track,
-                normalizedCandidate(candidate)
-            )
-
-            val verdict = when {
-                !titleCompatible -> "REJECT version-mismatch"
-                titleScore < 0.60 -> "REJECT title<0.60"
-                durationScore != null && durationScore < 0.0 -> "REJECT duration-mismatch"
-                metadataScore == null -> "REJECT resolver-gate"
-                metadataScore < MIN_PROVIDER_METADATA_SCORE -> "REJECT metadata<0.70"
-                else -> "ACCEPT"
-            }
-
-            debugLog(
-                "candidate[$index] id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
-                    "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
-                    "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
-                    "lyrics=${candidate.hasLyrics}"
-            )
-            debugLog(
-                "candidate[$index] scores compatible=$titleCompatible " +
-                    "title=${scoreText(titleScore)} artist=${scoreText(artistScore)} " +
-                    "album=${scoreText(albumScore)} duration=${scoreText(durationScore)} " +
-                    "metadata=${scoreText(metadataScore)} $verdict"
-            )
-        }
-    }
-
-    private fun scoreText(value: Double?): String {
-        return value?.let { String.format(Locale.US, "%.3f", it) } ?: "n/a"
-    }
-
-    private fun makeRequest(
-        endpoint: String,
-        params: LinkedHashMap<String, String>
-    ): String? {
-        val unsignedUrl = buildUnsignedUrl(endpoint, params)
-
-        var response = executeSigned(unsignedUrl, cachedSecret)
-        if (response != null && response.isAcceptedApiResponse()) {
-            return response
-        }
-
-        if (!attemptedSecretRefresh) {
-            synchronized(this) {
-                if (!attemptedSecretRefresh) {
-                    attemptedSecretRefresh = true
-                    fetchCurrentSecret()?.let { cachedSecret = it }
-                }
-            }
-            response = executeSigned(unsignedUrl, cachedSecret)
-            if (response != null && response.isAcceptedApiResponse()) {
-                return response
-            }
-        }
-
-        return response?.takeIf { it.isAcceptedApiResponse() }
-    }
-
-    private fun buildUnsignedUrl(
-        endpoint: String,
-        params: LinkedHashMap<String, String>
-    ): String {
-        val all = linkedMapOf(
-            "app_id" to APP_ID,
-            "format" to "json"
+        debugLog(
+            "macro match id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
+                "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
+                "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
+                "instrumental=${candidate.instrumental}"
         )
-        all.putAll(params)
-
-        val query = all.entries.joinToString("&") { (key, value) ->
-            "${urlEncode(key)}=${urlEncode(value)}"
-        }
-        return "$BASE_URL$endpoint?$query"
+        debugLog(
+            "macro scores title=${scoreText(titleScore)} artist=${scoreText(artistScore)} " +
+                "album=${scoreText(albumScore)} duration=${scoreText(durationScore)} " +
+                "metadata=${scoreText(metadata)}"
+        )
     }
 
-    private fun executeSigned(unsignedUrl: String, secret: String): String? {
-        val signature = generateSignature(unsignedUrl, secret)
-        val signedUrl = "$unsignedUrl&signature=${urlEncode(signature)}&signature_protocol=sha256"
-        val request = Request.Builder()
-            .url(signedUrl)
-            .header("User-Agent", USER_AGENT)
-            .build()
+    private fun deepFind(element: JsonElement?, key: String): JsonElement? {
+        if (element == null || element.isJsonNull) return null
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                debugLog("${response.code} ${URI(unsignedUrl).path.substringAfterLast('/')}")
-                body.takeIf { response.isSuccessful && it.isNotBlank() }
+        if (element.isJsonObject) {
+            val obj = element.asJsonObject
+            obj.get(key)?.let { return it }
+            for ((_, value) in obj.entrySet()) {
+                deepFind(value, key)?.let { return it }
             }
-        } catch (e: Exception) {
-            debugLog("request failed: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
-            null
-        }
-    }
-
-    private fun fetchCurrentSecret(): String? {
-        val searchRequest = Request.Builder()
-            .url(SEARCH_PAGE_URL)
-            .header("User-Agent", USER_AGENT)
-            .header("Cookie", "mxm_bab=AB")
-            .build()
-
-        val html = try {
-            client.newCall(searchRequest).execute().use { response ->
-                if (!response.isSuccessful) return null
-                response.body?.string().orEmpty()
+        } else if (element.isJsonArray) {
+            for (value in element.asJsonArray) {
+                deepFind(value, key)?.let { return it }
             }
-        } catch (_: Exception) {
-            return null
         }
 
-        val matches = APP_SCRIPT_REGEX.findAll(html).toList()
-        val scriptPath = matches.lastOrNull()?.groupValues?.getOrNull(1) ?: return null
-        val scriptUrl = when {
-            scriptPath.startsWith("https://") -> scriptPath
-            scriptPath.startsWith("//") -> "https:$scriptPath"
-            scriptPath.startsWith("/") -> "https://www.musixmatch.com$scriptPath"
-            else -> "https://www.musixmatch.com/$scriptPath"
-        }
-
-        val scriptRequest = Request.Builder()
-            .url(scriptUrl)
-            .header("User-Agent", USER_AGENT)
-            .build()
-
-        val javascript = try {
-            client.newCall(scriptRequest).execute().use { response ->
-                if (!response.isSuccessful) return null
-                response.body?.string().orEmpty()
-            }
-        } catch (_: Exception) {
-            return null
-        }
-
-        val encoded = SECRET_REGEX.find(javascript)?.groupValues?.getOrNull(1) ?: return null
-        return try {
-            val reversed = encoded.reversed()
-            String(Base64.getDecoder().decode(reversed), StandardCharsets.UTF_8)
-                .takeIf { it.isNotBlank() }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun generateSignature(url: String, secret: String): String {
-        val formatter = SimpleDateFormat("yyyyMMdd", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-        val message = (url + formatter.format(Date())).toByteArray(StandardCharsets.UTF_8)
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(secret.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
-        return Base64.getEncoder().encodeToString(mac.doFinal(message))
-    }
-
-    private fun String.isAcceptedApiResponse(): Boolean {
-        val root = parseJsonObject(this) ?: return false
-        return apiStatus(root) == 200
+        return null
     }
 
     private fun parseJsonObject(json: String): JsonObject? {
+        if (json.isBlank() || json.trimStart().startsWith("<")) return null
         return try {
             JsonParser.parseString(json).asJsonObject
         } catch (_: Exception) {
@@ -563,19 +511,15 @@ object MusixmatchClient {
         }
     }
 
-    private fun apiStatus(root: JsonObject): Int? {
-        return root.getAsJsonObject("message")
+    private fun apiStatus(root: JsonObject?): Int? {
+        return root
+            ?.getAsJsonObject("message")
             ?.getAsJsonObject("header")
             ?.intOrNull("status_code")
     }
 
     private fun JsonObject.string(name: String): String {
-        val value = get(name) ?: return ""
-        return try {
-            if (value.isJsonNull) "" else value.asString.orEmpty()
-        } catch (_: Exception) {
-            ""
-        }
+        return get(name)?.asStringOrNull().orEmpty()
     }
 
     private fun JsonObject.intOrNull(name: String): Int? {
@@ -602,7 +546,23 @@ object MusixmatchClient {
         }
     }
 
+    private fun JsonElement.asStringOrNull(): String? {
+        return try {
+            if (isJsonNull) null else asString
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun isPunctuationOnly(value: String): Boolean {
+        return value.isNotBlank() && value.none { it.isLetterOrDigit() }
+    }
+
     private fun secondsToMs(seconds: Double): Long = (seconds * 1000.0).roundToLong()
+
+    private fun scoreText(value: Double?): String {
+        return value?.let { String.format(Locale.US, "%.3f", it) } ?: "n/a"
+    }
 
     private fun urlEncode(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name())
@@ -611,9 +571,4 @@ object MusixmatchClient {
     private fun debugLog(message: String) {
         if (BuildConfig.DEBUG) Log.d(TAG, message)
     }
-
-    private val APP_SCRIPT_REGEX = Regex(
-        """src=[\"']([^\"']*/_next/static/chunks/pages/_app-[^\"']+\.js)[\"']"""
-    )
-    private val SECRET_REGEX = Regex("""from\(\s*[\"'](.*?)[\"']\s*\.split""")
 }
