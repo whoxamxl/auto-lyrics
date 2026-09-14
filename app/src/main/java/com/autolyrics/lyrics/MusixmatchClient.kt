@@ -19,11 +19,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 /**
- * Musixmatch provider using the anonymous desktop-token flow.
+ * Musixmatch provider using the anonymous mobile API flow.
  *
- * Flow:
- *  1. token.get -> anonymous user_token, cached in SharedPreferences.
- *  2. macro.subtitles.get -> matched metadata + richsync/subtitle macro calls.
+ * The desktop endpoint currently returns poisoned / unrelated matches, so this
+ * client follows the active mobile path used by current Musixmatch clients:
+ *  1. token.get -> short-lived anonymous user_token.
+ *  2. macro.subtitles.get -> matcher metadata + richsync/subtitle macro calls.
  *  3. track.richsync.get -> fallback RichSync request if the macro omitted it.
  *
  * This is an unofficial endpoint. Failures remain isolated to this provider.
@@ -31,17 +32,17 @@ import kotlin.math.roundToLong
 object MusixmatchClient {
 
     private const val TAG = "Musixmatch"
-    private const val BASE_URL = "https://apic-desktop.musixmatch.com/ws/1.1/"
-    private const val APP_ID = "web-desktop-app-v1.0"
+    private const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
+    private const val APP_ID = "mac-ios-v2.0"
+    private const val APP_VERSION = "10.1.1"
     private const val MIN_PROVIDER_METADATA_SCORE = 0.70
 
-    private const val TOKEN_PREF_KEY = "musixmatch_user_token"
-    private const val TOKEN_TIME_PREF_KEY = "musixmatch_user_token_time_ms"
-    private const val TOKEN_TTL_MS = 10L * 60L * 1000L
+    private const val TOKEN_PREF_KEY = "musixmatch_mobile_user_token"
+    private const val TOKEN_TIME_PREF_KEY = "musixmatch_mobile_user_token_time_ms"
+    private const val TOKEN_TTL_MS = 60L * 1000L
 
-    private const val USER_AGENT =
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    private const val MOBILE_USER_AGENT =
+        "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -102,7 +103,7 @@ object MusixmatchClient {
         logMatchDiagnostics(track, candidate)
 
         if (candidate.instrumental) {
-            debugLog("macro match rejected: instrumental")
+            debugLog("mobile macro match rejected: instrumental")
             return null
         }
 
@@ -112,7 +113,7 @@ object MusixmatchClient {
         )
         val metadataScore = LyricsProviderResolver.metadataScore(track, normalized)
         if (metadataScore == null || metadataScore < MIN_PROVIDER_METADATA_SCORE) {
-            debugLog("macro match rejected: metadata=${scoreText(metadataScore)}")
+            debugLog("mobile macro match rejected: metadata=${scoreText(metadataScore)}")
             return null
         }
 
@@ -121,7 +122,7 @@ object MusixmatchClient {
                 ?.let(::parseRichSyncResponse)
                 .orEmpty()
             val richSync = if (inlineRichSync.isNotEmpty()) {
-                debugLog("using RichSync embedded in macro response")
+                debugLog("using RichSync embedded in mobile macro response")
                 inlineRichSync
             } else if (candidate.commonTrackId != null) {
                 fetchRichSync(candidate, prefs)
@@ -130,7 +131,7 @@ object MusixmatchClient {
             }
 
             if (richSync.isNotEmpty()) {
-                debugLog("richsync accepted lines=${richSync.size}")
+                debugLog("mobile richsync accepted lines=${richSync.size}")
                 return MusixmatchResult(
                     lines = richSync,
                     matchedTitle = candidate.title,
@@ -145,7 +146,7 @@ object MusixmatchClient {
 
         val lineSync = parseSubtitleBody(match.subtitleBody)
         if (lineSync.isNotEmpty()) {
-            debugLog("line subtitle accepted lines=${lineSync.size}")
+            debugLog("mobile line subtitle accepted lines=${lineSync.size}")
             return MusixmatchResult(
                 lines = lineSync,
                 matchedTitle = candidate.title,
@@ -157,7 +158,7 @@ object MusixmatchClient {
             )
         }
 
-        debugLog("macro match had no usable synced lyrics")
+        debugLog("mobile macro match had no usable synced lyrics")
         return null
     }
 
@@ -166,21 +167,22 @@ object MusixmatchClient {
         prefs: SharedPreferences?
     ): JsonObject? {
         val params = linkedMapOf(
-            "namespace" to "lyrics_richsynced",
+            "namespace" to "lyrics_richsynched",
             "optional_calls" to "track.richsync",
             "subtitle_format" to "lrc",
             "q_artist" to track.artist,
             "q_track" to track.title
         )
+        if (track.album.isNotBlank()) {
+            params["q_album"] = track.album
+        }
         if (track.durationMs > 0L) {
-            params["f_subtitle_length"] = (track.durationMs / 1000.0).roundToLong().toString()
-            params["f_subtitle_length_max_deviation"] = "3"
+            params["q_duration"] = (track.durationMs / 1000.0).roundToLong().toString()
         }
 
         debugLog(
-            "macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
-                "f_subtitle_length='${params["f_subtitle_length"].orEmpty()}' " +
-                "max_deviation='${params["f_subtitle_length_max_deviation"].orEmpty()}'"
+            "mobile macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
+                "q_album='${params["q_album"].orEmpty()}' q_duration='${params["q_duration"].orEmpty()}'"
         )
 
         return authenticatedRequest("macro.subtitles.get", params, prefs)
@@ -212,7 +214,8 @@ object MusixmatchClient {
         )
 
         if (response.httpCode == 401 || apiStatus(response.json) == 401) {
-            debugLog("$endpoint token rejected; refreshing once")
+            debugLog("mobile $endpoint token rejected; refreshing once")
+            invalidateToken(prefs)
             token = getToken(prefs, force = true) ?: return null
             response = request(
                 endpoint = endpoint,
@@ -241,11 +244,11 @@ object MusixmatchClient {
                 !memoryToken.isNullOrBlank() &&
                 now - cachedTokenAtMs in 0 until TOKEN_TTL_MS
             ) {
-                debugLog("token cache hit")
+                debugLog("mobile token cache hit")
                 return memoryToken
             }
 
-            debugLog(if (force) "token.get refresh" else "token.get")
+            debugLog(if (force) "mobile token.get refresh" else "mobile token.get")
             val response = request(
                 endpoint = "token.get",
                 params = linkedMapOf("user_language" to "en")
@@ -258,14 +261,21 @@ object MusixmatchClient {
                     ?.putString(TOKEN_PREF_KEY, token)
                     ?.putLong(TOKEN_TIME_PREF_KEY, now)
                     ?.apply()
-                debugLog("token cached")
+                debugLog("mobile token cached")
                 return token
             }
 
-            // If refresh was rate-limited but an older token exists, give it one
-            // last chance. authenticatedRequest() will reject it if it is invalid.
             return cachedToken
         }
+    }
+
+    private fun invalidateToken(prefs: SharedPreferences?) {
+        cachedToken = null
+        cachedTokenAtMs = 0L
+        prefs?.edit()
+            ?.remove(TOKEN_PREF_KEY)
+            ?.remove(TOKEN_TIME_PREF_KEY)
+            ?.apply()
     }
 
     private fun request(
@@ -275,10 +285,11 @@ object MusixmatchClient {
         val url = buildUrl(endpoint, params)
         val request = Request.Builder()
             .url(url)
+            .header("x-mxm-app-version", APP_VERSION)
+            .header("X-User-Agent", MOBILE_USER_AGENT)
+            .header("User-Agent", MOBILE_USER_AGENT)
+            .header("Accept-Language", "en-US,en;q=0.9")
             .header("Accept", "application/json")
-            .header("Accept-Language", "en")
-            .header("Cookie", "AWSELBCORS=0; AWSELB=0")
-            .header("User-Agent", USER_AGENT)
             .build()
 
         return try {
@@ -286,12 +297,12 @@ object MusixmatchClient {
                 val body = response.body?.string().orEmpty()
                 val json = parseJsonObject(body)
                 debugLog(
-                    "${response.code} api=${apiStatus(json) ?: "-"} $endpoint"
+                    "mobile ${response.code} api=${apiStatus(json) ?: "-"} $endpoint"
                 )
                 HttpJsonResponse(response.code, json)
             }
         } catch (e: Exception) {
-            debugLog("$endpoint failed: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
+            debugLog("mobile $endpoint failed: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
             HttpJsonResponse(-1, null)
         }
     }
@@ -512,13 +523,13 @@ object MusixmatchClient {
                 "duration=${scoreText(targetDurationSec)}s"
         )
         debugLog(
-            "macro match id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
+            "mobile macro match id=${candidate.trackId ?: "-"}/${candidate.commonTrackId ?: "-"} " +
                 "title='${candidate.title}' artist='${candidate.artist}' album='${candidate.album}' " +
                 "duration=${scoreText(candidate.durationSec)}s rich=${candidate.hasRichSync} " +
                 "instrumental=${candidate.instrumental}"
         )
         debugLog(
-            "macro scores title=${scoreText(titleScore)} artist=${scoreText(artistScore)} " +
+            "mobile macro scores title=${scoreText(titleScore)} artist=${scoreText(artistScore)} " +
                 "album=${scoreText(albumScore)} duration=${scoreText(durationScore)} " +
                 "metadata=${scoreText(metadata)}"
         )
