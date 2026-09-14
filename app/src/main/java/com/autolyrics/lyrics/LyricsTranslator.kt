@@ -121,7 +121,7 @@ object LyricsTranslator {
             (retryState.phase == Phase.DOWNLOAD_FAILED ||
                 retryState.phase == Phase.DOWNLOAD_TIMED_OUT)
         ) {
-            startModelDownloadMonitor(language)
+            retryState.sourceLanguage?.let { startModelDownloadMonitor(it) }
         }
     }
 
