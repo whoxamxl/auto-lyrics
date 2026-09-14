@@ -3,6 +3,7 @@ package com.autolyrics.lyrics
 import android.util.Log
 import com.autolyrics.BuildConfig
 import com.autolyrics.model.LyricLine
+import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
 import okhttp3.FormBody
@@ -424,13 +425,39 @@ object PetitLyricsClient {
             val wordNodes = line.getElementsByTagName("word")
             if (wordNodes.length == 0) continue
 
-            val firstWord = wordNodes.item(0) as? Element ?: continue
-            val startMs = childText(firstWord, "starttime")?.toLongOrNull() ?: continue
-            val text = childText(line, "linestring").orEmpty().ifBlank { "♪" }
+            var lineStartMs: Long? = null
+            val words = ArrayList<LyricWord>(wordNodes.length)
+
+            for (wordIndex in 0 until wordNodes.length) {
+                val word = wordNodes.item(wordIndex) as? Element ?: continue
+                val rawStartMs = childText(word, "starttime")?.toLongOrNull() ?: continue
+                val startMs = rawStartMs.coerceAtLeast(0L)
+                if (lineStartMs == null) lineStartMs = startMs
+
+                val endTimeMs = childText(word, "endtime")
+                    ?.toLongOrNull()
+                    ?.takeIf { it >= startMs }
+                val wordText = childTextRaw(word, "wordstring").orEmpty()
+
+                // Empty wordstrings are used by PetitLyrics for timed blank lines.
+                // Keep their line timestamp, but do not create an invisible karaoke
+                // token. Non-empty whitespace is meaningful and must be preserved.
+                if (wordText.isNotEmpty()) {
+                    words += LyricWord(
+                        timeMs = startMs,
+                        text = wordText,
+                        endTimeMs = endTimeMs
+                    )
+                }
+            }
+
+            val startMs = lineStartMs ?: continue
+            val lineText = childTextRaw(line, "linestring").orEmpty().ifBlank { "♪" }
 
             lines += LyricLine(
-                timeMs = startMs.coerceAtLeast(0L),
-                text = text
+                timeMs = startMs,
+                text = lineText,
+                words = words
             )
         }
 
@@ -628,8 +655,12 @@ object PetitLyricsClient {
     }
 
     private fun childText(parent: Element, tagName: String): String? {
+        return childTextRaw(parent, tagName)?.trim()
+    }
+
+    private fun childTextRaw(parent: Element, tagName: String): String? {
         val nodes = parent.getElementsByTagName(tagName)
         if (nodes.length == 0) return null
-        return nodes.item(0)?.textContent?.trim()
+        return nodes.item(0)?.textContent
     }
 }

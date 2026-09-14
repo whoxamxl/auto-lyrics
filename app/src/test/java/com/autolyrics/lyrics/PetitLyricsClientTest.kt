@@ -10,19 +10,26 @@ import java.util.Base64
 class PetitLyricsClientTest {
 
     @Test
-    fun parsesType3WordSyncAsLineTimestamps() {
+    fun parsesType3WordSyncWithWordTimingAndExactSpacing() {
         val payload = """
             <wsy>
               <line>
                 <linestring>Alpha line</linestring>
+                <wordnum>2</wordnum>
                 <word>
                   <starttime>1200</starttime>
                   <endtime>1500</endtime>
-                  <wordstring>Alpha</wordstring>
+                  <wordstring>Alpha </wordstring>
+                </word>
+                <word>
+                  <starttime>1700</starttime>
+                  <endtime>2100</endtime>
+                  <wordstring>line</wordstring>
                 </word>
               </line>
               <line>
-                <linestring>Beta line</linestring>
+                <linestring>Beta</linestring>
+                <wordnum>1</wordnum>
                 <word>
                   <starttime>3400</starttime>
                   <endtime>3700</endtime>
@@ -53,10 +60,24 @@ class PetitLyricsClientTest {
 
         assertEquals(3, result?.lyricsType)
         assertEquals(2, result?.lines?.size)
-        assertEquals(1200L, result?.lines?.get(0)?.timeMs)
-        assertEquals("Alpha line", result?.lines?.get(0)?.text)
+
+        val firstLine = result?.lines?.get(0)
+        assertEquals(1200L, firstLine?.timeMs)
+        assertEquals("Alpha line", firstLine?.text)
+        assertEquals(2, firstLine?.words?.size)
+        assertEquals(1200L, firstLine?.words?.get(0)?.timeMs)
+        assertEquals(1500L, firstLine?.words?.get(0)?.endTimeMs)
+        assertEquals("Alpha ", firstLine?.words?.get(0)?.text)
+        assertEquals(1700L, firstLine?.words?.get(1)?.timeMs)
+        assertEquals(2100L, firstLine?.words?.get(1)?.endTimeMs)
+        assertEquals("line", firstLine?.words?.get(1)?.text)
+        assertEquals(
+            firstLine?.text,
+            firstLine?.words?.joinToString(separator = "") { it.text }
+        )
+
         assertEquals(3400L, result?.lines?.get(1)?.timeMs)
-        assertEquals("Beta line", result?.lines?.get(1)?.text)
+        assertEquals("Beta", result?.lines?.get(1)?.text)
         assertEquals("Test Song", result?.matchedTitle)
         assertEquals("Test Artist", result?.matchedArtist)
         assertEquals("Test Album", result?.matchedAlbum)
@@ -65,12 +86,16 @@ class PetitLyricsClientTest {
     }
 
     @Test
-    fun blankLineIsPreservedAsMusicMarker() {
+    fun blankLineIsPreservedAsMusicMarkerWithoutInvisibleWord() {
         val payload = """
             <wsy>
               <line>
                 <linestring></linestring>
-                <word><starttime>5000</starttime></word>
+                <word>
+                  <starttime>5000</starttime>
+                  <endtime>6000</endtime>
+                  <wordstring></wordstring>
+                </word>
               </line>
             </wsy>
         """.trimIndent()
@@ -80,6 +105,7 @@ class PetitLyricsClientTest {
         assertEquals(1, lines.size)
         assertEquals(5000L, lines[0].timeMs)
         assertEquals("♪", lines[0].text)
+        assertTrue(lines[0].words.isEmpty())
     }
 
     @Test
