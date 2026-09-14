@@ -155,6 +155,11 @@ object SyncLrcClient {
     }
 
     private fun debugLog(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
+        if (!BuildConfig.DEBUG) return
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // android.util.Log is not mocked in local JVM unit tests.
+        }
     }
 }
