@@ -636,8 +636,8 @@ class MediaTracker private constructor(context: Context) {
                         )
                     }
                 }
-            } catch (_: CancellationException) {
-                throw CancellationException()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) { }
         }
     }
