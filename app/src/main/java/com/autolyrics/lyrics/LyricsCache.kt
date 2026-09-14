@@ -12,6 +12,11 @@ import java.util.Locale
 
 class LyricsCache(context: Context) {
 
+    enum class Variant {
+        STANDARD,
+        KARAOKE
+    }
+
     private val cacheDir = File(context.filesDir, "lyrics_cache")
     private val gson = Gson()
 
@@ -39,8 +44,11 @@ class LyricsCache(context: Context) {
         val endTimeMs: Long? = null
     )
 
-    fun get(track: TrackInfo): Triple<List<LyricLine>, LyricsStatus, String>? {
-        val file = cacheFile(track)
+    fun get(
+        track: TrackInfo,
+        variant: Variant = Variant.STANDARD
+    ): Triple<List<LyricLine>, LyricsStatus, String>? {
+        val file = cacheFile(track, variant)
         if (!file.exists()) return null
 
         return try {
@@ -76,7 +84,8 @@ class LyricsCache(context: Context) {
         lines: List<LyricLine>,
         status: LyricsStatus,
         source: String,
-        refreshAfterMs: Long = DEFAULT_REFRESH_AFTER_MS
+        refreshAfterMs: Long = DEFAULT_REFRESH_AFTER_MS,
+        variant: Variant = Variant.STANDARD
     ) {
         try {
             val cached = CachedResult(
@@ -98,15 +107,18 @@ class LyricsCache(context: Context) {
                 timestamp = System.currentTimeMillis(),
                 refreshAfterMs = refreshAfterMs.coerceAtLeast(1L)
             )
-            val file = cacheFile(track)
+            val file = cacheFile(track, variant)
             file.writeText(gson.toJson(cached))
         } catch (_: Exception) {
             // cache write failures are non-fatal
         }
     }
 
-    fun getAge(track: TrackInfo): Long {
-        val file = cacheFile(track)
+    fun getAge(
+        track: TrackInfo,
+        variant: Variant = Variant.STANDARD
+    ): Long {
+        val file = cacheFile(track, variant)
         if (!file.exists()) return Long.MAX_VALUE
         return try {
             val json = file.readText()
@@ -117,8 +129,11 @@ class LyricsCache(context: Context) {
         }
     }
 
-    fun getRefreshAfterMs(track: TrackInfo): Long {
-        val file = cacheFile(track)
+    fun getRefreshAfterMs(
+        track: TrackInfo,
+        variant: Variant = Variant.STANDARD
+    ): Long {
+        val file = cacheFile(track, variant)
         if (!file.exists()) return 0L
         return try {
             val json = file.readText()
@@ -129,7 +144,7 @@ class LyricsCache(context: Context) {
         }
     }
 
-    private fun cacheFile(track: TrackInfo): File {
+    private fun cacheFile(track: TrackInfo, variant: Variant): File {
         val durationSec = if (track.durationMs > 0) {
             ((track.durationMs + 500L) / 1000L).toString()
         } else {
@@ -137,7 +152,8 @@ class LyricsCache(context: Context) {
         }
 
         val key = listOf(
-            "v12",
+            "v13",
+            variant.name.lowercase(Locale.ROOT),
             normalizeKeyPart(track.title),
             normalizeKeyPart(track.artist),
             normalizeKeyPart(track.album),
