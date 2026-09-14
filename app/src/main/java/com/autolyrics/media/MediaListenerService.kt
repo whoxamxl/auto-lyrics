@@ -2,6 +2,7 @@ package com.autolyrics.media
 
 import android.content.ComponentName
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
@@ -10,6 +11,7 @@ import android.service.notification.StatusBarNotification
 class MediaListenerService : NotificationListenerService() {
 
     private lateinit var sessionManager: MediaSessionManager
+    private var selectedSessionToken: MediaSession.Token? = null
 
     private val sessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
@@ -57,15 +59,23 @@ class MediaListenerService : NotificationListenerService() {
     private fun pickBestSession(controllers: List<MediaController>?) {
         val filtered = controllers?.filter { it.packageName != packageName }
         if (filtered.isNullOrEmpty()) {
+            selectedSessionToken = null
             MediaTracker.getInstance(this).onMediaSessionChanged(null)
             return
         }
+
+        val current = selectedSessionToken?.let { token ->
+            filtered.firstOrNull { controller -> controller.sessionToken == token }
+        }
+        val currentIsPlaying =
+            current?.playbackState?.state == PlaybackState.STATE_PLAYING
 
         val playing = filtered.firstOrNull { controller ->
             controller.playbackState?.state == PlaybackState.STATE_PLAYING
         }
 
-        val best = playing ?: filtered.first()
+        val best = if (currentIsPlaying) current else playing ?: filtered.first()
+        selectedSessionToken = best.sessionToken
         MediaTracker.getInstance(this).onMediaSessionChanged(best)
     }
 }
