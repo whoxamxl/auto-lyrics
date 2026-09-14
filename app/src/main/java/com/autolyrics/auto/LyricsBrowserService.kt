@@ -69,7 +69,6 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val SYNC_STEP_MS = 50L
         private const val SYNC_WINDOW_SIZE = 3
         private const val DEFAULT_WINDOW_SIZE = 5
-        private const val TRANSLATED_WINDOW_SIZE = 5
         private const val CURRENT_LINE_PREFIX = "▶  "
         // Em + en spacing approximates the rendered width of the current-line marker
         // so lyric text starts at the same x-position on surrounding rows.
@@ -214,7 +213,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                             .coerceIn(0, state.lines.size - 1)
                     } else { 0 }
 
-                    val windowSize = browseWindowSize(state)
+                    val windowSize = DEFAULT_WINDOW_SIZE
                     val half = windowSize / 2
                     val winStart = maxOf(0, estimatedIdx - half)
                     val winEnd = minOf(state.lines.size, winStart + windowSize)
@@ -374,11 +373,6 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         return "%d:%02d".format(min, sec)
     }
 
-    private fun browseWindowSize(state: LyricsState): Int {
-        val hasTranslation = state.translatedLines?.any { it.isNotBlank() } == true
-        return if (hasTranslation) TRANSLATED_WINDOW_SIZE else DEFAULT_WINDOW_SIZE
-    }
-
     private fun linePrefix(isCurrent: Boolean): String {
         return if (isCurrent) CURRENT_LINE_PREFIX else IDLE_LINE_PREFIX
     }
@@ -395,7 +389,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
         val posMs = getAaPositionMs()
         val aaCurrentIdx = findLineIndex(lines, posMs).coerceAtLeast(0)
-        val windowSize = browseWindowSize(state)
+        val windowSize = DEFAULT_WINDOW_SIZE
         val half = windowSize / 2
 
         val windowStart = maxOf(0, aaCurrentIdx - half)
@@ -692,7 +686,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             findLineIndex(lines, posMs).coerceAtLeast(0)
         }
 
-        val winSize = browseWindowSize(state)
+        val winSize = DEFAULT_WINDOW_SIZE
         val half = winSize / 2
         val windowStart = maxOf(0, currentIdx - half)
         val windowEnd = minOf(lines.size, windowStart + winSize)
