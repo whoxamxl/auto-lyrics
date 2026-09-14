@@ -37,7 +37,7 @@ object SyncLrcClient {
         val matchedArtist: String,
         val matchedAlbum: String,
         val matchedDurationSec: Double?,
-        val artistQueryCorroborated: Boolean = true
+        val artistQueryCorroborated: Boolean = false
     )
 
     internal data class ApiResponse(
@@ -137,7 +137,7 @@ object SyncLrcClient {
             matchedArtist = artist,
             matchedAlbum = album,
             matchedDurationSec = response.duration,
-            artistQueryCorroborated = requestedTrack?.artist?.isNotBlank() != false
+            artistQueryCorroborated = requestedTrack?.artist?.isNotBlank() == true
         )
     }
 
