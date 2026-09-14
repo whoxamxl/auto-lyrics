@@ -10,12 +10,15 @@ This document describes the current implementation rather than the original LRCL
 | **Sync tab** (AA) | Android Auto timing-adjustment section with a fixed three-row lyric preview and ±50 ms controls. |
 | **More tab** (AA) | Detailed track/lyrics information: provider, sync state, language, duration, offset, etc. |
 | **Now-playing card** (AA) | Standard Android Auto media now-playing UI rendered from `MediaMetadataCompat`. Current lyrics are placed in the display subtitle. |
-| **WORD_SYNC** | Synchronized lyrics with per-word/chunk timestamps. |
-| **LINE_SYNC** | Synchronized lyrics with line timestamps but no usable per-word timestamps. |
+| **WORD_SYNC** | Synchronized lyrics with usable sub-line timing tokens. A token may be a word, syllable, fragment, or character; the name does not guarantee linguistic word segmentation. |
+| **LINE_SYNC** | Synchronized lyrics with line timestamps but no usable sub-line timing tokens. |
+| **Timing token** | Raw provider unit stored as `LyricWord(timeMs, text, endTimeMs?)`. Timing tokens are preserved even when rendering groups several tokens into one display word/phrase. |
+| **Display grouping** | Renderer-only mapping from fine timing tokens to human-readable lexical ranges. It never rewrites provider timestamps in cache/state. |
 | **Plain lyrics** | Unsynchronized text represented by `LyricsStatus.PLAIN_ONLY`. |
 | **LRCLIB** | Provider supporting synchronized and plain results with documented duration metadata. |
-| **Musixmatch** | Provider using the anonymous mobile API; supports RichSync word timing and line-synced subtitle fallback. |
-| **PetitLyrics** | Optional Japanese-oriented provider enabled by build-time client configuration. |
+| **Musixmatch** | Provider using the anonymous mobile API; supports RichSync timing and line-synced subtitle fallback. |
+| **PetitLyrics** | Optional Japanese-oriented provider enabled by build-time client configuration; Type 3 exposes token start/end timing. |
+| **SyncLRC** | Karaoke-only public API source for Enhanced LRC. Auto Lyrics accepts only real `type=karaoke` responses from this provider. |
 | **Provider Resolver** | Common scorer used to validate and compare normalized provider candidates. |
 | **AA offset** | Android-Auto-specific delay stored as `aa_offset_ms`. |
 | **Phone/global offset** | Main lyric offset managed by `MediaTracker.offsetMs` / `lyrics_offset_ms`. |
@@ -29,26 +32,29 @@ AutoLyricsApp
        ├─ LrcLibClient ─────────────┐
        ├─ MusixmatchClient ─────────┤ parallel
        ├─ PetitLyricsClient ────────┤ when configured
+       ├─ SyncLrcClient ────────────┤ Karaoke mode only
        ├─ LyricsProviderResolver ◀──┘
-       ├─ LyricsCache
+       ├─ LyricsCache (STANDARD / KARAOKE variants)
        ├─ MetadataCleaner
        ├─ LrcParser
+       ├─ KaraokeTiming
        ├─ LyricsTranslator
        └─ AlbumColorExtractor
 
 Phone UI
   ├─ MainActivity
   └─ PerformanceActivity
+       └─ LyricWordLayout display grouping
 
 Android Auto
-  ├─ LyricsBrowserService
-  │   ├─ MediaBrowser browse tree
-  │   │   ├─ Lyrics
-  │   │   ├─ Sync
-  │   │   └─ More
-  │   ├─ MediaSession / now-playing metadata
-  │   └─ transport-control proxy
-  └─ BootReceiver
+  └─ LyricsBrowserService
+       ├─ MediaBrowser browse tree
+       │   ├─ Lyrics
+       │   ├─ Sync
+       │   └─ More
+       ├─ MediaSession / now-playing metadata
+       ├─ transport-control proxy
+       └─ LyricWordLayout display grouping
 ```
 
 `MediaListenerService` is a `NotificationListenerService`; its access allows the app to inspect active media sessions through `MediaSessionManager`. The service keeps the currently selected playing session sticky while it remains active so another media session does not steal selection merely because controller ordering changes.
@@ -61,29 +67,45 @@ Track changes are debounced by 600 ms before a new lookup starts. While playback
 
 The phone/global offset is included by `MediaTracker.getCurrentPositionMs()`. Android Auto applies its own additional `aa_offset_ms` inside `LyricsBrowserService`.
 
-Do not add a global/provider-specific timing correction merely because one playback path appears early or late. Phone speakers, Bluetooth, Android Auto, codecs, and head units can have different output latency. The existing phone/global and AA-specific controls are the correct place for stable device/output-path compensation unless a provider timestamp bias is demonstrated across multiple playback paths.
+Do **not** add a provider-wide pre-offset merely because lyrics appear early on one output path. The media-session logical position can lead audible output because of Bluetooth, codec, Android Auto, DAC, or head-unit buffering. Stable output-path latency belongs in the existing phone/global or AA-specific offset controls unless a source timestamp bias is demonstrated independently across multiple playback paths.
 
 ## Provider execution
 
-LRCLIB and Musixmatch are started concurrently. PetitLyrics joins the same parallel comparison when it is configured. Each provider gets a hard **5 second total budget** at the `MediaTracker` layer.
+In standard mode:
 
-Provider speed is **not part of the score**. If multiple providers return within budget, a 200 ms response receives no scoring advantage over a 2 s response. Speed changes the comparison only when a provider times out or otherwise fails to produce a candidate.
+```text
+LRCLIB ───────┐
+Musixmatch ───┼─ parallel comparison
+PetitLyrics ──┘  when configured
+```
 
-Musixmatch is treated as an opportunistic unofficial source for cache-completeness purposes: its temporary unavailability does not shorten an otherwise healthy LRCLIB/PetitLyrics cache result.
+In Karaoke mode:
+
+```text
+LRCLIB ───────┐
+Musixmatch ───┤
+PetitLyrics ──┤ when configured
+SyncLRC ──────┼─ parallel comparison
+              └─ WORD_SYNC coverage only
+```
+
+Each provider gets a hard **5 second total budget** at the `MediaTracker` layer. Provider speed is **not part of the score**. A 200 ms response receives no scoring advantage over a 2 s response as long as both complete inside the budget.
+
+Musixmatch and SyncLRC are treated as opportunistic sources for cache-completeness purposes. Their temporary unavailability does not by itself make a healthy LRCLIB/PetitLyrics standard comparison incomplete. Karaoke caching has an additional rule described below so a temporary word-sync miss does not pin LINE_SYNC for a week.
 
 Debug logging:
 
 ```powershell
-adb logcat -s Musixmatch:D ProviderResolver:D PetitLyrics:D
+adb logcat -s Musixmatch:D SyncLRC:D ProviderResolver:D PetitLyrics:D
 ```
 
-Typical resolver diagnostics include elapsed time, timeout state, candidate presence, metadata score, quality score, source confidence, synchronization kind, and selected provider.
+Typical diagnostics include elapsed time, timeout state, candidate presence, metadata score, quality score, source confidence, synchronization kind, resolver mode, and selected provider.
 
 ## Provider resolution
 
-Provider-specific clients perform lookup/fallback and return normalized `LyricsProviderCandidate` objects. `LyricsProviderResolver` then validates and scores the candidates together.
+Provider-specific clients perform lookup/fallback and return normalized `LyricsProviderCandidate` objects. `LyricsProviderResolver` then validates and scores candidates together.
 
-The final score is:
+The base final score is:
 
 ```text
 final score = metadata match     × 0.82
@@ -93,19 +115,20 @@ final score = metadata match     × 0.82
 
 A synchronized candidate (`LyricsStatus.FOUND`) always outranks a plain candidate. LRCLIB plain lyrics remain the last-resort fallback when no acceptable synchronized candidate exists.
 
-### Why WORD_SYNC does not automatically beat LINE_SYNC
+### Standard vs Karaoke selection
 
-`WORD_SYNC` and `LINE_SYNC` describe timing **granularity**, not recording identity or correctness. A word-synced payload can still belong to the wrong edit/live/remaster, contain inferior text, or come from a lower-confidence match.
+The resolver deliberately separates recording correctness from timing richness.
 
-For that reason the resolver does not apply a blanket rule such as:
+**Standard mode** is accuracy-first: the synchronized candidate with the best ordinary final score wins.
 
-```text
-WORD_SYNC > LINE_SYNC
-```
+**Karaoke mode** first computes that same standard winner, then considers only candidates that:
 
-Instead, metadata and lyric payload quality remain dominant. A perfectly matched high-confidence LINE_SYNC result may therefore beat a weaker WORD_SYNC result. This is intentional: the correct recording with line timing is preferable to the wrong recording with richer timestamps.
+- declare `WORD_SYNC`,
+- actually contain `LyricWord` timing data,
+- have metadata score no more than **0.03** below the standard winner,
+- have lyric payload quality no more than **0.05** below the standard winner.
 
-Provider/source confidence can still favor particular synchronization formats where justified (for example PetitLyrics word/line data on Japanese tracks), but sync granularity alone is not an unconditional override.
+Among those near-equivalent word-timed candidates, the highest ordinary final score wins. This allows, for example, an equivalent Musixmatch/SyncLRC word-timed result to replace an LRCLIB LINE_SYNC result during Karaoke mode without allowing a materially weaker live/remix/mismatched recording to win just because it has richer timestamps.
 
 ### Metadata validation
 
@@ -120,7 +143,7 @@ album      3%
 
 Weights are renormalized when a field is unavailable or intentionally treated as non-comparable.
 
-PetitLyrics duration is not currently trusted for common resolver scoring because observed response fields are not sufficiently reliable across formats/clients. LRCLIB and Musixmatch duration may be used when present.
+PetitLyrics duration is not trusted for common resolver scoring because observed response fields are not sufficiently reliable across formats/clients. LRCLIB, Musixmatch, and SyncLRC duration may be used when present.
 
 ### Cross-script artist names
 
@@ -140,13 +163,11 @@ Some players expose a contributor list instead of one performer, for example:
 Alan Menken, Howard Ashman, Samuel E. Wright, Disney
 ```
 
-For near-exact title matches, artist similarity can inspect comma/semicolon-delimited components and accept a strong component match such as `Samuel E. Wright`.
-
-The full metadata string is preserved; the app does not globally truncate artist names at the first comma.
+For near-exact title matches, artist similarity can inspect comma/semicolon-delimited components and accept a strong component match such as `Samuel E. Wright`. The full media-session artist string is preserved; it is not globally truncated at the first comma.
 
 ### Lyric payload quality
 
-The resolver scores the payload separately from metadata. Current checks include:
+The resolver scores payload quality separately from metadata. Current checks include:
 
 - suspicious Japanese / Latin-only alternation,
 - near-duplicate timestamps around transliteration lines,
@@ -158,7 +179,31 @@ The Japanese/Latin alternation penalty primarily catches LRCLIB entries containi
 
 ### Source confidence
 
-Source confidence is deliberately a small part of the final score (8%). Current policy favors PetitLyrics Type 3/Type 2 data on Japanese tracks and LRCLIB synchronized data on non-Japanese tracks. Musixmatch currently uses the generic synchronized-provider confidence unless a more specific policy is added later. Metadata and payload quality remain dominant.
+Source confidence is deliberately only 8% of the final score. Current policy favors PetitLyrics Type 3/Type 2 on Japanese tracks and LRCLIB synchronized data on non-Japanese tracks. Musixmatch and SyncLRC currently use the generic synchronized-provider confidence rather than receiving a special high-trust override. Metadata and payload quality remain dominant.
+
+## Timing tokens and display grouping
+
+Raw timing granularity and visual highlight granularity are intentionally separate.
+
+A provider may return:
+
+```text
+Pro @ 1000 ms
+vi  @ 1100 ms
+der @ 1200 ms
+```
+
+while the original source line says `Provider`. `LyricLine.words` retains all three timestamps. `LyricWordLayout` aligns those raw tokens back to `LyricLine.text` and highlights the lexical source range `Provider` for each of them.
+
+For Japanese, source data may be character-granular:
+
+```text
+君 / を / 忘 / れ / な / い
+```
+
+The renderer uses Java/Android word boundaries plus a conservative Japanese display heuristic that merges an adjacent hiragana suffix into a preceding kanji-containing range. The result is intended to look closer to `君を / 忘れない` than six separate character highlights. This is a UI heuristic, not a morphological analyzer; raw provider timing remains untouched.
+
+`LyricWordLayout` falls back to its previous separator reconstruction when provider timing tokens cannot be aligned to the original source line.
 
 ## LRCLIB provider
 
@@ -197,32 +242,23 @@ macro.subtitles.get
     └── track.subtitles.get
 ```
 
-The macro query includes title and artist plus album/duration when available. The provider does **not** deep-search arbitrary `track` objects in the macro payload; it explicitly reads `macro_calls["matcher.track.get"]` so unrelated nested tracks cannot accidentally become the accepted match.
+The macro query includes title and artist plus album/duration when available. The provider explicitly reads `macro_calls["matcher.track.get"]`; unrelated nested track objects are not accepted as the match.
 
-The returned matcher metadata is normalized into a candidate and passed through the same local metadata validation used by the resolver. Instrumental mismatches and weak metadata matches are rejected before any lyric payload is accepted.
+The returned matcher metadata is normalized into a candidate and passed through the same local metadata validation used by the resolver. Instrumental mismatches and weak metadata matches are rejected before lyric payload acceptance.
 
 If a request returns HTTP/API 401, the cached token is invalidated and one fresh-token retry is allowed.
 
 ### RichSync
 
-When `has_richsync=1`, Auto Lyrics prefers `track.richsync.get`. RichSync line objects contain a line start (`ts`) and chunks whose `o` value is an offset from that line start:
+RichSync line objects contain a line start (`ts`) and chunks whose `o` value is an offset from that line start:
 
 ```text
-word timestamp = ts + o
+timing token timestamp = ts + o
 ```
 
-The resulting timestamps are stored in `LyricWord` and persist through `LyricsCache` for both whitespace-separated and naturally adjacent scripts.
+Those timestamps are stored in `LyricWord` and persist through `LyricsCache`. Chunk text is kept without synthetic separators. `LyricWordLayout` reconstructs the original line and performs display grouping at render time.
 
-RichSync chunk text is intentionally stored without synthetic separators. `LyricWordLayout` aligns each timed word back to the original `LyricLine.text` and reconstructs the exact prefix/suffix text between chunks. MainActivity, PerformanceActivity, and Android Auto all use this layout when rendering karaoke. This means, for example:
-
-```text
-Hey Jude       → Hey + " " + Jude
-君を忘れない   → 君を + "" + 忘れない
-```
-
-The same mechanism also preserves mixed-script lines instead of hard-coding a Japanese-specific rule.
-
-If RichSync is absent or unusable, `track.subtitles.get` LRC is parsed as LINE_SYNC. Both are `LyricsStatus.FOUND` because both are synchronized; only the timing granularity differs.
+If RichSync is absent or unusable, `track.subtitles.get` LRC is parsed as LINE_SYNC. Both are `LyricsStatus.FOUND`; only timing granularity differs.
 
 Musixmatch uses an unofficial/internal endpoint and is not affiliated with this project. Availability and response behavior may change independently of Auto Lyrics.
 
@@ -232,8 +268,12 @@ The PetitLyrics integration follows the request/response structure demonstrated 
 
 Supported formats:
 
-- **lyricsType=3 / WSY** — word-sync XML. The current main implementation uses the first word start time of each line as the line timestamp; full PetitLyrics word timing is not yet imported into `LyricWord`.
+- **lyricsType=3 / WSY** — word/token-sync XML. Each `<word>` contributes `starttime`, optional `endtime`, and raw `wordstring` to `LyricWord`. Empty word strings still establish a line timestamp but do not create invisible karaoke tokens.
 - **lyricsType=2 / LSY** — binary line-sync timing combined with a **lyricsType=1** plain-text companion, preferably resolved by the same `lyricsId`.
+
+Type 3 can be finer than linguistic words. Japanese payloads may contain one character per timed element and English payloads can contain fragments. That granularity is preserved in state/cache and normalized visually by `LyricWordLayout` rather than merged destructively in the provider parser.
+
+`endTimeMs` is preserved through `LyricsCache` and used by `KaraokeTiming`. When a Type 3 word explicitly ends before the next word starts, the gap has no active highlight instead of keeping the previous token lit.
 
 Search progressively relaxes:
 
@@ -250,6 +290,55 @@ The search stage that produced a candidate is preserved through `artistQueryCorr
 Type-1 companion fallback is metadata-ranked when an exact `lyricsId` lookup is unavailable; it is not allowed to blindly use the first returned record.
 
 PetitLyrics uses an internal/unofficial endpoint and is not affiliated with this project.
+
+## SyncLRC provider
+
+`SyncLrcClient` is a Karaoke-mode-only consumer of the public SyncLRC API:
+
+```text
+GET https://synclrc.dev/lyrics
+    ?track=<title>
+    &artist=<artist>
+    &type=karaoke
+    [&album=<album>]
+    [&duration=<rounded seconds>]
+```
+
+SyncLRC documents Karaoke as Enhanced LRC. Its public project uses LRCLIB as its primary lyrics/metadata path and an upstream LDDC/syncedlyrics stack for Karaoke coverage from sources including NetEase, QQ Music, Kugou, and Musixmatch.
+
+Auto Lyrics does not copy or embed SyncLRC/LDDC source code; it only calls the public JSON API.
+
+### Fallback handling
+
+SyncLRC intentionally falls back when requested Karaoke is unavailable. A `type=karaoke` request can therefore return a body whose actual `type` is `synced` or `plain`.
+
+Auto Lyrics rejects those fallback responses in `SyncLrcClient`. This provider creates a candidate only when:
+
+```text
+response.type == "karaoke"
+AND Enhanced LRC parses successfully
+AND at least one line contains timed tokens
+```
+
+LRCLIB already covers LINE_SYNC/plain directly, so accepting SyncLRC's fallback would only duplicate that path and could distort resolver confidence.
+
+### Enhanced LRC parser behavior
+
+`LrcParser.parseKaraoke()` accepts line tags such as:
+
+```text
+[00:01.00]
+```
+
+and timed-token tags such as:
+
+```text
+<00:01.25>
+```
+
+Dot or colon fractional separators are tolerated. The parser removes timing tags to recover exact `LyricLine.text`, while each raw substring between timed tags becomes a `LyricWord`. Spaces attached to a token are retained so the original source line can be reconstructed exactly.
+
+SyncLRC is queried only in Karaoke mode. It currently uses the resolver's generic synchronized-provider confidence; it is not granted an unconditional preference over direct providers.
 
 ## PetitLyrics local configuration
 
@@ -287,21 +376,26 @@ These identifiers are compiled into Android `BuildConfig`. Keeping them outside 
 Cache identity currently includes:
 
 ```text
-cache namespace (v11)
+cache namespace (v13)
+STANDARD or KARAOKE variant
 normalized title
 normalized artist
 normalized album
 rounded duration in seconds
 ```
 
-A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus each `LyricWord(timeMs, text)`, so a cached Musixmatch RichSync result remains word-synchronized after restart/reload.
+A cached result is displayed immediately. `LyricsCache` preserves line timestamps plus `LyricWord(timeMs, text, endTimeMs)`, so Musixmatch RichSync, PetitLyrics Type 3, and Enhanced-LRC timing survive restart/reload.
+
+Normal and Karaoke selections use separate cache variants. This prevents a Karaoke-specific WORD_SYNC winner from pinning normal mode, and prevents a standard LRCLIB LINE_SYNC winner from hiding a richer Karaoke candidate.
 
 Per-entry `refreshAfterMs` controls background refresh:
 
-- **Fully corroborated LRCLIB/PetitLyrics comparison:** 7 days.
+- **Normal fully corroborated LRCLIB/PetitLyrics comparison:** 7 days.
 - **Incomplete/provisional comparison:** 15 minutes.
+- **Karaoke with a usable selected WORD_SYNC result and otherwise complete normal comparison:** 7 days.
+- **Karaoke where no usable word-timed result was selected:** 15 minutes, even if the normal provider set is healthy.
 
-When PetitLyrics is configured, the provider set is considered complete only when LRCLIB and PetitLyrics both return candidates and neither times out. Musixmatch availability intentionally does not gate this cache-completeness decision because it is an opportunistic unofficial source.
+When PetitLyrics is configured, the normal provider set is considered complete only when LRCLIB and PetitLyrics both return candidates and neither times out. Musixmatch and SyncLRC availability intentionally do not gate normal cache completeness because they are opportunistic word-sync sources.
 
 ### Known cache-result limitation
 
@@ -313,9 +407,23 @@ TRANSIENT_ERROR
 TIMEOUT
 ```
 
-Timeout itself is tracked, but a clean provider “no result” and some transient failures are otherwise indistinguishable. A legitimate one-provider-only song can therefore remain on the 15-minute refresh policy instead of the normal 7-day policy. This costs extra traffic but avoids pinning a fallback result for a week after a temporary outage.
+Timeout itself is tracked, but a clean provider “no result” and some transient failures are otherwise indistinguishable. A legitimate one-provider-only song can therefore remain on the 15-minute refresh policy instead of the normal 7-day policy. This costs extra traffic but avoids pinning a fallback result after a temporary outage.
 
 A future cleanup can replace the nullable provider boundary with an explicit result type such as `Found / NotFound / TransientError`.
+
+## Karaoke active-word timing
+
+`KaraokeTiming.activeWordIndex()` is shared by phone/Performance and Android Auto.
+
+Behavior:
+
+- without explicit word end times, the active token is the latest token whose `timeMs <= position`,
+- with `endTimeMs`, a token stops being active at that explicit end,
+- a silent gap between explicit end and the next token has no active highlight,
+- an ended newer token never causes an older open-ended token to reactivate,
+- backward seeking within the same line selects the earlier token again.
+
+This timing selection is independent from `LyricWordLayout` display grouping. The timing layer picks a raw token index; the renderer decides which lexical source-text range that token should visually highlight.
 
 ## Android Auto browse UI
 
@@ -334,11 +442,9 @@ Keeping Lyrics first makes it the primary/default browse section.
 - **5 rows** are shown when no translations are present,
 - **3 rows** are shown when translated subtitles are present.
 
-The current line is kept near the center where track boundaries allow it. The track header includes artist, position/duration, synchronization state, provider, and detected language where available.
-
 ### Sync tab
 
-The Sync tab uses a fixed three-row lyric preview and provides AA-specific `−50 ms` / `+50 ms` controls. The current row can use karaoke text when `LyricWord` data exists.
+The Sync tab uses a fixed three-row lyric preview and provides AA-specific `−50 ms` / `+50 ms` controls. The current row can use Karaoke text when `LyricWord` data exists.
 
 ### More tab
 
@@ -348,11 +454,11 @@ More can show title, artist, album, provider, lyric synchronization state, detec
 
 `MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE` carries the current lyric text. The original line is prefixed with `▶`; translated text, when present, is placed on the second line without another marker.
 
-### Browse refresh behavior and karaoke timing
+### Browse refresh behavior
 
-Browse refreshes notify section IDs instead of rebuilding the root tabs on every lyric update. Updates are throttled to reduce Android Auto browse churn.
+Browse refreshes notify section IDs instead of rebuilding root tabs on every update. The browse tree is throttled to reduce Android Auto churn. Future-word look-ahead was removed: Auto Lyrics no longer intentionally advances 300/600 ms into a future word to mask browse latency.
 
-Karaoke selection now follows the provider timestamp strictly: the marked word is the latest `LyricWord.timeMs <= current position`. The previous 300/600 ms future-word look-ahead was removed because it could make accurate RichSync appear early. The browse tree is still throttled, so its visual word transition can be coarser or slightly late compared with the phone/Performance UI; it is no longer intentionally advanced into future words. The now-playing subtitle is checked every 200 ms.
+The browse tree can therefore update somewhat coarser or later than the phone/Performance UI. The now-playing subtitle is checked every 200 ms.
 
 Current constants include:
 
@@ -391,15 +497,21 @@ Provider/matching regression cases should continue to cover:
 - Multi-contributor player metadata can match one exact contributor on a near-exact title.
 - Unrelated contributor does not become a valid artist match.
 - Japanese/Latin interleaved payload receives a quality penalty.
-- PetitLyrics Type 3 parsing.
+- Standard mode preserves accuracy-first selection.
+- Karaoke mode prefers only near-equivalent candidates with actual word/timing-token payloads.
+- PetitLyrics Type 3 parses exact `starttime`, `endtime`, and `wordstring` into `LyricWord`.
 - PetitLyrics Type 2 timing decode + Type 1 companion selection.
+- Explicit PetitLyrics word-end gaps become unhighlighted gaps.
 - Musixmatch anonymous token parsing and `UpgradeOnly` rejection.
 - Musixmatch macro parsing uses the explicit `matcher.track.get` result.
-- A failed matcher call cannot cause unrelated subtitle/richsync data to be accepted.
+- A failed matcher call cannot cause unrelated subtitle/RichSync data to be accepted.
 - Embedded Musixmatch RichSync is parsed before line subtitle fallback.
-- RichSync uses `ts + o` for word timing.
-- Japanese/no-space RichSync retains both exact line text and per-word timestamps.
-- `LyricWordLayout` reconstructs English spaces, Japanese adjacency, and mixed-script separators from the original line.
+- RichSync uses `ts + o` for timing.
+- Japanese/no-space RichSync retains exact line text and timing tokens.
+- Enhanced LRC preserves source spacing and absolute timing.
+- SyncLRC accepts only real `type=karaoke` responses and rejects synced/plain fallback bodies.
+- Fine English fragments map to the whole source word for display.
+- Japanese character timing maps to word-like display ranges while raw timing remains unchanged.
 - Synchronized candidates outrank plain candidates.
 
 Manual DHU regression pass after Android Auto UI changes:
@@ -412,22 +524,26 @@ Manual DHU regression pass after Android Auto UI changes:
 6. More shows provider/details without affecting timing.
 7. Now-playing subtitle marks the current lyric with `▶`.
 8. Plain lyrics still advance correctly.
-9. WORD_SYNC highlighting preserves the original spacing for English, Japanese/no-space, and mixed-script lines.
-10. Android Auto does not mark a future word before its timestamp solely to hide browse refresh latency.
+9. WORD_SYNC display grouping preserves source text for English, Japanese/no-space, and mixed-script lines.
+10. Android Auto does not mark a future timing token before its timestamp solely to hide browse refresh latency.
+11. Karaoke ON can select an equivalent word-timed provider while Karaoke OFF can independently retain the standard winner.
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Active media tracking, provider concurrency/budgets, resolver orchestration, cache refresh policy. |
+| `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Active media tracking, provider concurrency/budgets, mode-aware resolver orchestration, cache refresh policy. |
 | `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB lookup, provider-specific matching, relaxed search. |
 | `app/src/main/java/com/autolyrics/lyrics/MusixmatchClient.kt` | Musixmatch mobile token/macro/RichSync/subtitle flow. |
-| `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | PetitLyrics search, Type 3/Type 2 parsing, query provenance. |
-| `app/src/main/java/com/autolyrics/lyrics/LyricsProviderResolver.kt` | Common metadata/quality/source scoring and final provider selection. |
-| `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Persistent lyrics cache and per-entry refresh interval. |
+| `app/src/main/java/com/autolyrics/lyrics/PetitLyricsClient.kt` | PetitLyrics search, Type 3 token timing, Type 2 line timing, query provenance. |
+| `app/src/main/java/com/autolyrics/lyrics/SyncLrcClient.kt` | Karaoke-only public SyncLRC API integration and fallback rejection. |
+| `app/src/main/java/com/autolyrics/lyrics/LrcParser.kt` | Standard LRC and Enhanced-LRC parsing with exact source-text reconstruction. |
+| `app/src/main/java/com/autolyrics/lyrics/LyricsProviderResolver.kt` | Common metadata/quality/source scoring and mode-aware final provider selection. |
+| `app/src/main/java/com/autolyrics/lyrics/LyricsCache.kt` | Persistent STANDARD/KARAOKE lyrics cache and per-entry refresh interval. |
+| `app/src/main/java/com/autolyrics/lyrics/KaraokeTiming.kt` | Shared raw-token active-index selection including explicit end times. |
 | `app/src/main/java/com/autolyrics/lyrics/MetadataCleaner.kt` | Player metadata cleanup before provider search. |
-| `app/src/main/java/com/autolyrics/util/LyricWordLayout.kt` | Reconstructs exact separators around timed lyric chunks from the original line text. |
-| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls, karaoke text. |
+| `app/src/main/java/com/autolyrics/util/LyricWordLayout.kt` | Exact source-text layout plus fine-token → display-word grouping. |
+| `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser tree, MediaSession metadata, Sync controls, Karaoke text. |
 | `app/src/main/res/xml/automotive_app_desc.xml` | Declares the Android Auto media integration. |
 | `.env.example` | Local PetitLyrics template / no-`.env` fallback. |
 | `.github/workflows/build.yml` | CI, release build, release-secret injection/validation, GitHub Release creation. |
