@@ -205,6 +205,7 @@ adb logcat -s Musixmatch:D ProviderResolver:D PetitLyrics:D
 
 - Lyrics availability depends on the upstream providers; not every recording has usable synchronized lyrics.
 - Musixmatch and PetitLyrics integrations use unofficial/internal API surfaces and can change independently of Auto Lyrics.
+- **Current renderer limitation:** Musixmatch RichSync lines without whitespace (common in Japanese) keep their exact line text/timing but suppress `LyricWord` chunks to avoid the UI inserting artificial spaces. Those lines therefore behave as LINE_SYNC until the renderer becomes chunk-spacing-aware.
 - Media-session metadata quality varies by player. Auto Lyrics includes heuristics for common metadata problems, but unusual formats can still miss or mismatch.
 - Audio-output latency can differ between the phone speaker, Bluetooth, and Android Auto. Use the existing phone/global or AA-specific offset controls when an output path has a stable device-specific delay; Auto Lyrics does not apply a fixed provider-wide compensation without evidence that the timing source itself is systematically biased.
 - PetitLyrics client identifiers embedded in a distributed Android APK are extractable by design; do not use values that rely on client-side secrecy.
