@@ -2,13 +2,7 @@ package com.autolyrics.lyrics
 
 import java.util.Locale
 
-/**
- * Central translation-language configuration.
- *
- * English remains the active target until the settings UI is wired to
- * [TARGET_LANGUAGE_PREF_KEY]. Keeping the supported target list here gives the
- * translator and the UI one source of truth as multi-language output is added.
- */
+/** Central translation-language configuration shared by Settings and the translator. */
 object TranslationLanguages {
     const val DEFAULT_TARGET_LANGUAGE = "en"
     const val TARGET_LANGUAGE_PREF_KEY = "translation_target_language"
@@ -40,6 +34,14 @@ object TranslationLanguages {
     fun normalizeTargetLanguage(languageTag: String?): String {
         val normalized = normalizeLanguageTag(languageTag)
         return normalized?.takeIf { it in primaryTargets } ?: DEFAULT_TARGET_LANGUAGE
+    }
+
+    fun displayName(languageTag: String?): String {
+        val normalized = normalizeLanguageTag(languageTag) ?: DEFAULT_TARGET_LANGUAGE
+        return Locale.forLanguageTag(normalized)
+            .getDisplayLanguage(Locale.ENGLISH)
+            .takeIf { it.isNotBlank() }
+            ?: normalized.uppercase(Locale.ENGLISH)
     }
 
     /**
