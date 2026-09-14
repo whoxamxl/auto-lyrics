@@ -18,14 +18,22 @@ Auto Lyrics is an Android app that follows the active media session and displays
 - **Synced and plain fallback** — synchronized lyrics are preferred; LRCLIB plain text remains a last-resort fallback.
 - **Robust metadata matching** — handles recording/version qualifiers, romanized-vs-native-script artist names, and multi-contributor metadata such as `Alan Menken, Howard Ashman, Samuel E. Wright, Disney`.
 - **Works with normal media-session players** — Spotify, YouTube Music, Apple Music, Poweramp, and other apps that expose usable Android media metadata.
+- **Demand-aware provider work** — active media sessions are monitored continuously, but lyric providers are queried only while the phone UI is in use or Android Auto projection is connected.
 - **Phone companion UI** — lyrics remain available on the phone, including the performance/karaoke view.
 - **Local cache** — normal and Karaoke selections use separate cache variants; word timestamps and explicit word end times are preserved.
 
 ## Architecture
 
 ```text
+Phone Activity lifecycle ───────┐
+Android Auto CarConnection ─────┤
+                                ▼
+                      LyricsDemandController
+                                │ active demand
+                                ▼
 MediaListenerService (NotificationListenerService)
-    │
+    │ selects active media sessions continuously
+    │ forwards the selected session only while demand is active
     ▼
 MediaTracker (singleton / StateFlow)
     │
@@ -43,6 +51,8 @@ MediaTracker (singleton / StateFlow)
       Phone UI                 LyricsBrowserService
                                (Android Auto MediaBrowser + MediaSession)
 ```
+
+Provider demand is active while at least one Auto Lyrics phone Activity is started **or** while Android Auto projection is connected. Android Auto keeps lyric resolution active for the full projection session even when another AA app is in the foreground. When neither condition is true, `MediaListenerService` may keep selecting the current media session, but it does not forward session changes to `MediaTracker`, so new provider lookups do not start.
 
 The provider resolver validates plausible candidates with one common scoring model. Synchronized candidates outrank plain lyrics. Timing granularity alone does not override a materially stronger recording match, but Karaoke mode can choose a near-equivalent candidate that contains real word/timing-token data.
 
@@ -149,13 +159,14 @@ Shows detailed information such as title, artist, album, provider, synchronizati
 
 ## How Lyrics Are Resolved
 
-1. The active media session provides title, artist, album, duration, playback state, and position.
-2. Metadata is cleaned before lookup.
-3. LRCLIB and Musixmatch are launched in parallel; configured PetitLyrics joins them. When Karaoke mode is enabled, SyncLRC is launched in the same comparison as an additional word-timing source.
-4. Provider-specific lookup logic gathers plausible candidates. Musixmatch locally validates the matcher result from its mobile macro response. SyncLRC is accepted only when the response contains a genuine Enhanced-LRC `karaoke` payload.
-5. `LyricsProviderResolver` validates metadata and compares candidate quality/source confidence.
-6. In normal mode, the highest-quality synchronized recording match wins. In Karaoke mode, a real WORD_SYNC candidate can replace that winner only when metadata and payload quality remain near-equivalent.
-7. The selected result is cached in a mode-specific cache variant. Karaoke falls back to a shorter refresh interval when no usable word timing was found, so a transient provider miss does not pin LINE_SYNC for a week.
+1. `MediaListenerService` continuously selects the best active media session, but forwards it for lyric work only while the phone UI is active or Android Auto projection is connected.
+2. The selected media session provides title, artist, album, duration, playback state, and position.
+3. Metadata is cleaned before lookup.
+4. LRCLIB and Musixmatch are launched in parallel; configured PetitLyrics joins them. When Karaoke mode is enabled, SyncLRC is launched in the same comparison as an additional word-timing source.
+5. Provider-specific lookup logic gathers plausible candidates. Musixmatch locally validates the matcher result from its mobile macro response. SyncLRC is accepted only when the response contains a genuine Enhanced-LRC `karaoke` payload.
+6. `LyricsProviderResolver` validates metadata and compares candidate quality/source confidence.
+7. In normal mode, the highest-quality synchronized recording match wins. In Karaoke mode, a real WORD_SYNC candidate can replace that winner only when metadata and payload quality remain near-equivalent.
+8. The selected result is cached in a mode-specific cache variant. Karaoke falls back to a shorter refresh interval when no usable word timing was found, so a transient provider miss does not pin LINE_SYNC for a week.
 
 This design is intentionally not “first provider to respond wins”; normal request latency is not part of the score. A provider only loses due to speed when it exceeds its timeout budget and therefore fails to produce a candidate for that comparison.
 
