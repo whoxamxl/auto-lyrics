@@ -385,13 +385,13 @@ class PerformanceLyricsView @JvmOverloads constructor(
             lineLayout.layout.draw(canvas)
 
             if (activeKaraoke) {
-                drawWordBloom(canvas, lineLayout, lines[index], alpha)
+                drawWordHighlight(canvas, lineLayout, lines[index], alpha)
             }
             canvas.restore()
         }
     }
 
-    private fun drawWordBloom(
+    private fun drawWordHighlight(
         canvas: Canvas,
         lineLayout: LineLayout,
         line: LyricLine,
@@ -420,7 +420,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
             ?: (groupStartMs + LAST_GROUP_MS)
         val progress = ((position - groupStartMs).toFloat() /
             (groupEndMs - groupStartMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
-        val bloom = sin(PI.toFloat() * smoothstep(progress))
+        val emphasis = sin(PI.toFloat() * smoothstep(progress))
+        val emphasisColor = lerpColor(activeColor, highlightColor, 0.65f * emphasis)
 
         val layout = lineLayout.layout
         val boundedEnd = end.coerceAtMost(lineLayout.text.length)
@@ -428,7 +429,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
         val lastVisualLine = layout.getLineForOffset((boundedEnd - 1).coerceAtLeast(start))
 
         if (firstVisualLine != lastVisualLine) {
-            drawHighlightedRange(canvas, layout, start, boundedEnd, alpha)
+            drawHighlightedRange(canvas, layout, start, boundedEnd, alpha, emphasisColor)
             return
         }
 
@@ -438,28 +439,10 @@ class PerformanceLyricsView @JvmOverloads constructor(
         val right = maxOf(xStart, xEnd)
         val top = layout.getLineTop(firstVisualLine).toFloat()
         val bottom = layout.getLineBottom(firstVisualLine).toFloat()
-        val pivotX = (left + right) / 2f
-        val pivotY = (top + bottom) / 2f
 
         canvas.save()
-        canvas.clipRect(
-            left - BLOOM_CLIP_PAD_PX,
-            top - BLOOM_CLIP_PAD_PX,
-            right + BLOOM_CLIP_PAD_PX,
-            bottom + BLOOM_CLIP_PAD_PX
-        )
-        canvas.scale(1f + WORD_BLOOM * bloom, 1f + WORD_BLOOM * bloom, pivotX, pivotY)
-
-        if (bloom > 0.02f) {
-            textPaint.color = highlightColor
-            textPaint.alpha = (alpha * 0.32f * bloom * 255).toInt().coerceIn(0, 255)
-            canvas.save()
-            canvas.scale(1.05f, 1.05f, pivotX, pivotY)
-            layout.draw(canvas)
-            canvas.restore()
-        }
-
-        textPaint.color = lerpColor(activeColor, highlightColor, 0.65f * bloom)
+        canvas.clipRect(left - 2f, top, right + 2f, bottom)
+        textPaint.color = emphasisColor
         textPaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
         layout.draw(canvas)
         canvas.restore()
@@ -470,7 +453,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
         layout: StaticLayout,
         start: Int,
         end: Int,
-        alpha: Float
+        alpha: Float,
+        color: Int
     ) {
         val firstLine = layout.getLineForOffset(start)
         val lastLine = layout.getLineForOffset((end - 1).coerceAtLeast(start))
@@ -487,7 +471,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
                 maxOf(x1, x2) + 2f,
                 layout.getLineBottom(visualLine).toFloat()
             )
-            textPaint.color = highlightColor
+            textPaint.color = color
             textPaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
             layout.draw(canvas)
             canvas.restore()
@@ -529,10 +513,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
         private const val DAMPING_RATIO = 0.82f
         private const val SETTLE_EPS = 0.0015f
         private const val SNAP_JUMP_LINES = 6f
-        private const val WORD_BLOOM = 0.10f
         private const val LAST_GROUP_MS = 650L
         private const val DRAW_MARGIN_PX = 160f
-        private const val BLOOM_CLIP_PAD_PX = 36f
 
         private fun smoothstep(value: Float): Float {
             val t = value.coerceIn(0f, 1f)
