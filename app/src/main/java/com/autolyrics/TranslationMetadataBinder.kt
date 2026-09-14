@@ -26,7 +26,7 @@ object TranslationMetadataBinder {
         val prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val mediaTracker = MediaTracker.getInstance(activity)
 
-        jobs[activity] = activity.lifecycleScope.launch {
+        val job = activity.lifecycleScope.launch {
             activity.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
                     if (state.source.isBlank()) return@collect
@@ -52,6 +52,12 @@ object TranslationMetadataBinder {
                         }
                     }
                 }
+            }
+        }
+        jobs[activity] = job
+        job.invokeOnCompletion {
+            synchronized(jobs) {
+                if (jobs[activity] === job) jobs.remove(activity)
             }
         }
     }
