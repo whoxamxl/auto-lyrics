@@ -3,6 +3,7 @@ package com.autolyrics.util
 import com.autolyrics.model.LyricLine
 import java.text.BreakIterator
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Reconstructs separators around timed lyric tokens from the provider's original
@@ -99,10 +100,15 @@ object LyricWordLayout {
      * [karaokeText] without exposing timing/display coupling as public API.
      */
     internal fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): DisplayRange? {
-        val tokenSpans = locateTokens(line) ?: return null
-        val token = tokenSpans.getOrNull(activeTokenIndex) ?: return null
         val ranges = lexicalRanges(line.text)
         if (ranges.isEmpty()) return null
+
+        val tokenSpans = locateTokens(line)
+        if (tokenSpans == null) {
+            return fallbackDisplayRange(line, activeTokenIndex, ranges)
+        }
+
+        val token = tokenSpans.getOrNull(activeTokenIndex) ?: return null
 
         ranges.firstOrNull { range ->
             token.start < range.end && token.end > range.start
@@ -130,6 +136,27 @@ object LyricWordLayout {
         }
 
         return spans
+    }
+
+    private fun fallbackDisplayRange(
+        line: LyricLine,
+        activeTokenIndex: Int,
+        ranges: List<DisplayRange>
+    ): DisplayRange? {
+        if (activeTokenIndex !in line.words.indices || ranges.isEmpty()) return null
+        if (line.words.size == 1) {
+            return DisplayRange(ranges.first().start, ranges.last().end)
+        }
+
+        // If provider token strings cannot be aligned verbatim (case, punctuation,
+        // or Unicode-normalization differences), keep karaoke available by mapping
+        // token order onto the provider line's lexical ranges. First and last
+        // tokens stay anchored to the first and last visible ranges, while finer
+        // token streams naturally collapse onto shared display ranges.
+        val fraction = activeTokenIndex.toFloat() / line.words.lastIndex.toFloat()
+        val rangeIndex = (fraction * ranges.lastIndex).roundToInt()
+            .coerceIn(0, ranges.lastIndex)
+        return ranges[rangeIndex]
     }
 
     private fun lexicalRanges(text: String): List<DisplayRange> {
