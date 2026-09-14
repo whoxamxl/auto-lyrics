@@ -16,7 +16,7 @@ class SyncLrcClientTest {
     )
 
     @Test
-    fun acceptsOnlyRealKaraokeResponse() {
+    fun acceptsCurrentPublicKaraokeFieldResponse() {
         val json = """
             {
               "id": "abc",
@@ -25,8 +25,9 @@ class SyncLrcClientTest {
               "album": "Example Album",
               "duration": 180,
               "instrumental": false,
-              "type": "karaoke",
-              "lyrics": "[00:01.00]<00:01.00>Pro<00:01.10>vi<00:01.20>der"
+              "karaoke": "[00:01.00]<00:01.00>Pro<00:01.10>vi<00:01.20>der",
+              "synced": "[00:01.00]Provider",
+              "plain": "Provider"
             }
         """.trimIndent()
 
@@ -40,7 +41,37 @@ class SyncLrcClientTest {
     }
 
     @Test
-    fun rejectsSyncedFallbackFromKaraokeRequest() {
+    fun acceptsLegacyTypeSpecificKaraokeResponseForCompatibility() {
+        val json = """
+            {
+              "track": "Provider",
+              "artist": "Example Artist",
+              "type": "karaoke",
+              "lyrics": "[00:01.00]<00:01.00>Provider"
+            }
+        """.trimIndent()
+
+        val result = SyncLrcClient.parseApiResponse(json, track)
+
+        assertEquals("Provider", result?.lines?.single()?.text)
+    }
+
+    @Test
+    fun rejectsCurrentResponseWithoutKaraokePayload() {
+        val json = """
+            {
+              "track": "Provider",
+              "artist": "Example Artist",
+              "synced": "[00:01.00]Provider",
+              "plain": "Provider"
+            }
+        """.trimIndent()
+
+        assertNull(SyncLrcClient.parseApiResponse(json, track))
+    }
+
+    @Test
+    fun rejectsLegacySyncedFallbackFromKaraokeRequest() {
         val json = """
             {
               "track": "Provider",
@@ -54,7 +85,7 @@ class SyncLrcClientTest {
     }
 
     @Test
-    fun rejectsPlainFallbackFromKaraokeRequest() {
+    fun rejectsLegacyPlainFallbackFromKaraokeRequest() {
         val json = """
             {
               "track": "Provider",
@@ -74,8 +105,7 @@ class SyncLrcClientTest {
               "track": "Provider",
               "artist": "Example Artist",
               "instrumental": true,
-              "type": "karaoke",
-              "lyrics": "[00:01.00]<00:01.00>Provider"
+              "karaoke": "[00:01.00]<00:01.00>Provider"
             }
         """.trimIndent()
 
@@ -88,8 +118,7 @@ class SyncLrcClientTest {
             {
               "track": "君を忘れない",
               "artist": "Example Artist",
-              "type": "karaoke",
-              "lyrics": "[00:01.00]<00:01.00>君<00:01.10>を<00:01.20>忘<00:01.30>れ<00:01.40>な<00:01.50>い"
+              "karaoke": "[00:01.00]<00:01.00>君<00:01.10>を<00:01.20>忘<00:01.30>れ<00:01.40>な<00:01.50>い"
             }
         """.trimIndent()
 
