@@ -67,6 +67,12 @@ object LyricsTranslator {
     @Volatile
     private var appContext: Context? = null
 
+    // The most recent supported non-English source language owns the shared Phone UI.
+    // Background model monitors for older languages continue running, but they must not
+    // overwrite status for a newer foreground language.
+    @Volatile
+    private var statusOwnerLanguage: String? = null
+
     // Model downloads belong to application-level translation infrastructure rather
     // than to one track. This scope deliberately survives cancellation of a track's
     // translationJob so changing to English/no-lyrics content cannot stop the model
@@ -83,10 +89,9 @@ object LyricsTranslator {
     // the monitor a child of that track coroutine.
     private val activeModelMonitors = ConcurrentHashMap<String, Deferred<Boolean>>()
 
-    // A retryable failure stays latched until the user explicitly presses Retry.
-    // This prevents every track change from silently re-running a failed model
-    // download/translation attempt. Retry clears the latch, while any still-running
-    // ML Kit model Task remains available for reuse.
+    // Retryable failures are latched per source language. A failure for Japanese must
+    // not prevent a later French track from translating, while another Japanese track
+    // still waits for an explicit Retry.
     private val retryRequired = ConcurrentHashMap<String, UiState>()
 
     private val _uiState = MutableStateFlow(UiState())
@@ -101,38 +106,26 @@ object LyricsTranslator {
     }
 
     fun prepareManualRetry() {
-        val retryStates = retryRequired.values.toList()
-        if (retryStates.isNotEmpty()) {
-            Log.d(TAG, "manual retry enabled; clearing ${retryStates.size} retry gate(s)")
-            retryRequired.clear()
+        val language = _uiState.value.sourceLanguage
+        val retryState = language?.let { retryRequired.remove(it) }
+
+        if (retryState != null) {
+            Log.d(TAG, "manual retry enabled; clearing retry gate for $language")
+            statusOwnerLanguage = language
         }
         resetUiState()
 
-        // Restart model monitoring independently of the current song. This matters
-        // when Retry is pressed while the current track is English or has no lyrics.
-        retryStates
-            .filter {
-                it.phase == Phase.DOWNLOAD_FAILED ||
-                    it.phase == Phase.DOWNLOAD_TIMED_OUT
-            }
-            .mapNotNull { it.sourceLanguage }
-            .distinct()
-            .forEach { language ->
-                startModelDownloadMonitor(language)
-            }
+        // Restart only the failed language's model monitor. Other languages may have
+        // their own independent retry gates and must remain untouched.
+        if (retryState != null &&
+            (retryState.phase == Phase.DOWNLOAD_FAILED ||
+                retryState.phase == Phase.DOWNLOAD_TIMED_OUT)
+        ) {
+            startModelDownloadMonitor(language)
+        }
     }
 
     suspend fun translateLines(lines: List<LyricLine>): TranslationResult? {
-        retryRequired.values.firstOrNull()?.let { blockedState ->
-            Log.d(
-                TAG,
-                "automatic translation retry suppressed until user presses Retry: " +
-                    "language=${blockedState.sourceLanguage} phase=${blockedState.phase}"
-            )
-            _uiState.value = blockedState
-            return null
-        }
-
         Log.d(TAG, "translateLines start: lines=${lines.size}")
         updateState(Phase.DETECTING_LANGUAGE)
 
@@ -176,6 +169,20 @@ object LyricsTranslator {
             val reason = "ML Kit does not support source language '$langCode'"
             Log.w(TAG, "skip: $reason")
             updateState(Phase.UNSUPPORTED_LANGUAGE, sourceLanguage = langCode, error = reason)
+            return null
+        }
+
+        // From this point the current track owns translation status. Existing model
+        // downloads for other languages keep running silently in the background.
+        statusOwnerLanguage = langCode
+
+        retryRequired[langCode]?.let { blockedState ->
+            Log.d(
+                TAG,
+                "automatic translation retry suppressed until user presses Retry: " +
+                    "language=$langCode phase=${blockedState.phase}"
+            )
+            _uiState.value = blockedState
             return null
         }
 
@@ -294,7 +301,17 @@ object LyricsTranslator {
             error = reason
         )
         retryRequired[language] = state
-        _uiState.value = state
+
+        if (statusOwnerLanguage == null || statusOwnerLanguage == language) {
+            statusOwnerLanguage = language
+            _uiState.value = state
+        } else {
+            Log.d(
+                TAG,
+                "retry state latched in background without replacing foreground UI: " +
+                    "language=$language owner=$statusOwnerLanguage phase=$phase"
+            )
+        }
     }
 
     private fun updateState(
@@ -475,9 +492,11 @@ object LyricsTranslator {
                 Phase.DOWNLOADING_MODEL
             }
 
-            // Re-publish the current model state so a track change to English/no-lyrics
-            // cannot make the Phone UI look as though the background operation stopped.
-            updateState(waitPhase, sourceLanguage = sourceLanguage)
+            // Only the current status owner may publish to the shared UI. Older model
+            // downloads continue polling and timing out independently in the background.
+            if (statusOwnerLanguage == sourceLanguage) {
+                updateState(waitPhase, sourceLanguage = sourceLanguage)
+            }
 
             if (previousThermalRestriction != thermallyRestricted) {
                 if (thermallyRestricted) {
