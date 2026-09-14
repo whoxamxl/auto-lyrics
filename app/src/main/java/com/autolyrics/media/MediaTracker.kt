@@ -19,6 +19,7 @@ import com.autolyrics.lyrics.LyricsProviderResolver
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
 import com.autolyrics.lyrics.PetitLyricsClient
+import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
@@ -53,8 +54,13 @@ class MediaTracker private constructor(context: Context) {
 
     private val preferenceChangeListener =
         SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == TRANSLATION_ENABLED_KEY) {
-                handler.post { handleTranslationPreferenceChanged() }
+            when (key) {
+                TRANSLATION_ENABLED_KEY -> {
+                    handler.post { handleTranslationPreferenceChanged() }
+                }
+                TranslationLanguages.TARGET_LANGUAGE_PREF_KEY -> {
+                    handler.post { handleTranslationTargetChanged() }
+                }
             }
         }
 
@@ -575,15 +581,54 @@ class MediaTracker private constructor(context: Context) {
         translateIfNeeded(currentState.lines, track)
     }
 
+    private fun handleTranslationTargetChanged() {
+        translationJob?.cancel()
+        LyricsTranslator.resetUiState()
+        _state.value = _state.value.copy(
+            translatedLines = null,
+            detectedLanguage = null
+        )
+
+        if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) return
+
+        val currentState = _state.value
+        val track = currentState.track ?: return
+        if (currentState.lines.isEmpty()) return
+        if (currentState.status != LyricsStatus.FOUND &&
+            currentState.status != LyricsStatus.PLAIN_ONLY
+        ) {
+            return
+        }
+
+        translateIfNeeded(currentState.lines, track)
+    }
+
+    private fun selectedTargetLanguage(): String {
+        return TranslationLanguages.normalizeTargetLanguage(
+            prefs.getString(
+                TranslationLanguages.TARGET_LANGUAGE_PREF_KEY,
+                TranslationLanguages.DEFAULT_TARGET_LANGUAGE
+            )
+        )
+    }
+
     private fun translateIfNeeded(lines: List<LyricLine>, track: TrackInfo) {
         if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) return
+        val targetLanguage = selectedTargetLanguage()
+
         translationJob?.cancel()
         translationJob = scope.launch(Dispatchers.IO) {
             try {
-                val result = LyricsTranslator.translateLines(lines) ?: return@launch
+                val result = LyricsTranslator.translateLines(
+                    lines = lines,
+                    targetLanguage = targetLanguage
+                ) ?: return@launch
+
                 withContext(Dispatchers.Main) {
                     if (_state.value.track == track &&
-                        prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)
+                        prefs.getBoolean(TRANSLATION_ENABLED_KEY, true) &&
+                        selectedTargetLanguage() == targetLanguage &&
+                        result.targetLanguage == targetLanguage
                     ) {
                         _state.value = _state.value.copy(
                             translatedLines = result.translatedLines,
@@ -591,6 +636,8 @@ class MediaTracker private constructor(context: Context) {
                         )
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) { }
         }
     }

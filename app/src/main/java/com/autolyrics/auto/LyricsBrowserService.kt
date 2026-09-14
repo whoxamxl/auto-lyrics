@@ -13,6 +13,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media.MediaBrowserServiceCompat
+import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
@@ -35,6 +36,8 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
     private var displayedStatus: LyricsStatus? = null
     private var displayedTrackTitle: String? = null
     private var displayedSource: String? = null
+    private var displayedDetectedLanguage: String? = null
+    private var displayedHasTranslation = false
     private var lastSubtitleText: String? = null
     private var lastAlbumArt: Bitmap? = null
 
@@ -56,6 +59,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                     aaOffsetMs = sp.getLong(key, 0L)
                     forceRefresh()
                 }
+                TranslationLanguages.TARGET_LANGUAGE_PREF_KEY -> {
+                    forceRefresh()
+                }
             }
         }
 
@@ -73,6 +79,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         // Em + en spacing approximates the rendered width of the current-line marker
         // so lyric text starts at the same x-position on surrounding rows.
         private const val IDLE_LINE_PREFIX = "\u2003\u2002"
+        // Browse subtitles render smaller than titles; em + en + three-per-em spacing
+        // gives an effective indent of about 1.8em without changing Now Playing.
+        private const val TRANSLATION_SUBTITLE_PREFIX = "\u2003\u2002\u2004"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
         private const val BROWSE_KARAOKE_WINDOW_MS = 600L
@@ -325,8 +334,26 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         }
         items.add(buildTextItem("more_sync", "Lyrics", subtitle = syncStatus))
 
-        state.detectedLanguage?.takeIf { it.isNotBlank() }?.let { language ->
-            items.add(buildTextItem("more_language", "Language", subtitle = language.uppercase()))
+        val sourceLanguage = TranslationLanguages.normalizeLanguageTag(state.detectedLanguage)
+        if (sourceLanguage != null) {
+            if (state.translatedLines != null) {
+                val targetLanguage = selectedTranslationTarget()
+                items.add(
+                    buildTextItem(
+                        "more_translation",
+                        "Translation",
+                        subtitle = "${sourceLanguage.uppercase()} → ${targetLanguage.uppercase()}"
+                    )
+                )
+            } else {
+                items.add(
+                    buildTextItem(
+                        "more_language",
+                        "Language",
+                        subtitle = sourceLanguage.uppercase()
+                    )
+                )
+            }
         }
         if (track.durationMs > 0) {
             items.add(buildTextItem("more_duration", "Duration", subtitle = formatTime(track.durationMs)))
@@ -430,7 +457,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             !subtitle.isNullOrBlank() &&
             (id.startsWith("line_") || id.startsWith("sync_line_"))
         ) {
-            "$IDLE_LINE_PREFIX$subtitle"
+            "$TRANSLATION_SUBTITLE_PREFIX$subtitle"
         } else {
             subtitle
         }
@@ -461,14 +488,32 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             .substringBefore("(")
             .trim()
         val providerSuffix = if (provider.isNotBlank()) " · $provider" else ""
-        val lang = state.detectedLanguage?.uppercase()
-        val langSuffix = if (lang != null) " · $lang" else ""
+        val sourceLanguage = TranslationLanguages.normalizeLanguageTag(state.detectedLanguage)
+        val languageSuffix = if (sourceLanguage != null) {
+            if (state.translatedLines != null) {
+                " · ${sourceLanguage.uppercase()}→${selectedTranslationTarget().uppercase()}"
+            } else {
+                " · ${sourceLanguage.uppercase()}"
+            }
+        } else {
+            ""
+        }
 
         return when (state.status) {
-            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$langSuffix"
-            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$langSuffix"
+            LyricsStatus.FOUND -> "⟳ Synced$providerSuffix$languageSuffix"
+            LyricsStatus.PLAIN_ONLY -> "⟳ Not synced$providerSuffix$languageSuffix"
             else -> "⟳ Sync"
         }
+    }
+
+    private fun selectedTranslationTarget(): String {
+        val prefs = getSharedPreferences("auto_lyrics_prefs", MODE_PRIVATE)
+        return TranslationLanguages.normalizeTargetLanguage(
+            prefs.getString(
+                TranslationLanguages.TARGET_LANGUAGE_PREF_KEY,
+                TranslationLanguages.DEFAULT_TARGET_LANGUAGE
+            )
+        )
     }
 
     // --- Karaoke helpers ---
@@ -549,7 +594,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
                 }
                 val markedOriginal = "$CURRENT_LINE_PREFIX$original"
                 val trans = state.translatedLines?.getOrNull(lineIdx)?.takeIf { it.isNotBlank() }
-                return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
+                return if (trans != null) "$markedOriginal\n$IDLE_LINE_PREFIX$trans" else markedOriginal
             }
         }
 
@@ -562,7 +607,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             val original = state.lines[idx].text
             val markedOriginal = "$CURRENT_LINE_PREFIX$original"
             val trans = state.translatedLines?.getOrNull(idx)?.takeIf { it.isNotBlank() }
-            return if (trans != null) "$markedOriginal\n$trans" else markedOriginal
+            return if (trans != null) "$markedOriginal\n$IDLE_LINE_PREFIX$trans" else markedOriginal
         }
 
         return when (state.status) {
@@ -717,6 +762,8 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         displayedWindowEnd = -1
         displayedCurrentIdx = -1
         displayedSource = null
+        displayedDetectedLanguage = null
+        displayedHasTranslation = false
         lastNotifyTime = 0L
         resetKaraokeState()
         notifyBrowseSections()
@@ -726,6 +773,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val statusChanged = state.status != displayedStatus
         val trackChanged = state.track?.title != displayedTrackTitle
         val sourceChanged = state.source != displayedSource
+        val detectedLanguageChanged = state.detectedLanguage != displayedDetectedLanguage
+        val hasTranslation = state.translatedLines != null
+        val translationAvailabilityChanged = hasTranslation != displayedHasTranslation
 
         if (trackChanged) {
             displayedWindowStart = -1
@@ -734,6 +784,8 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
             displayedStatus = state.status
             displayedTrackTitle = state.track?.title
             displayedSource = state.source
+            displayedDetectedLanguage = state.detectedLanguage
+            displayedHasTranslation = hasTranslation
             lastNotifyTime = System.currentTimeMillis()
             handler.removeCallbacksAndMessages(null)
             pendingNotify = false
@@ -748,13 +800,19 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         val karaokeActive = aaKaraokeEnabled && state.status == LyricsStatus.FOUND
             && state.lines.getOrNull(state.currentIndex)?.words?.isNotEmpty() == true
 
-        if (!windowChanged && !lineChanged && !statusChanged && !sourceChanged && !karaokeActive) return
+        if (!windowChanged && !lineChanged && !statusChanged && !sourceChanged &&
+            !detectedLanguageChanged && !translationAvailabilityChanged && !karaokeActive
+        ) {
+            return
+        }
 
         displayedWindowStart = win.start
         displayedWindowEnd = win.end
         displayedCurrentIdx = win.currentIdx
         displayedStatus = state.status
         displayedSource = state.source
+        displayedDetectedLanguage = state.detectedLanguage
+        displayedHasTranslation = hasTranslation
 
         val now = System.currentTimeMillis()
         val elapsed = now - lastNotifyTime
