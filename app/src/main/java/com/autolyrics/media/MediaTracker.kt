@@ -51,9 +51,17 @@ class MediaTracker private constructor(context: Context) {
     private var pendingArt: Bitmap? = null
     private var lyricsOffsetMs: Long = 0L
 
+    private val preferenceChangeListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == TRANSLATION_ENABLED_KEY) {
+                handler.post { handleTranslationPreferenceChanged() }
+            }
+        }
+
     init {
         lyricsOffsetMs = prefs.getLong("lyrics_offset_ms", 0L)
         _state.value = _state.value.copy(offsetMs = lyricsOffsetMs)
+        prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener)
     }
 
     private val positionChecker = object : Runnable {
@@ -544,14 +552,39 @@ class MediaTracker private constructor(context: Context) {
         return null
     }
 
+    private fun handleTranslationPreferenceChanged() {
+        translationJob?.cancel()
+
+        if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) {
+            _state.value = _state.value.copy(
+                translatedLines = null,
+                detectedLanguage = null
+            )
+            return
+        }
+
+        val currentState = _state.value
+        val track = currentState.track ?: return
+        if (currentState.lines.isEmpty()) return
+        if (currentState.status != LyricsStatus.FOUND &&
+            currentState.status != LyricsStatus.PLAIN_ONLY
+        ) {
+            return
+        }
+
+        translateIfNeeded(currentState.lines, track)
+    }
+
     private fun translateIfNeeded(lines: List<LyricLine>, track: TrackInfo) {
-        if (!prefs.getBoolean("translation_enabled", true)) return
+        if (!prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)) return
         translationJob?.cancel()
         translationJob = scope.launch(Dispatchers.IO) {
             try {
                 val result = LyricsTranslator.translateLines(lines) ?: return@launch
                 withContext(Dispatchers.Main) {
-                    if (_state.value.track == track) {
+                    if (_state.value.track == track &&
+                        prefs.getBoolean(TRANSLATION_ENABLED_KEY, true)
+                    ) {
                         _state.value = _state.value.copy(
                             translatedLines = result.translatedLines,
                             detectedLanguage = result.detectedLanguage
@@ -566,6 +599,7 @@ class MediaTracker private constructor(context: Context) {
         private const val PROVIDER_BUDGET_MS = 5_000L
         private const val PROVISIONAL_CACHE_REFRESH_MS = 15L * 60 * 1000
         private const val PROVIDER_RESOLVER_TAG = "ProviderResolver"
+        private const val TRANSLATION_ENABLED_KEY = "translation_enabled"
 
         @Volatile
         private var instance: MediaTracker? = null
