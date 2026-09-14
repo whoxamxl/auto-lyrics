@@ -63,6 +63,57 @@ class LyricWordLayoutTest {
     }
 
     @Test
+    fun englishFragmentsHighlightWholeDisplayWord() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Provider timing works",
+            words = listOf(
+                LyricWord(1_000L, "Pro"),
+                LyricWord(1_100L, "vi"),
+                LyricWord(1_200L, "der"),
+                LyricWord(1_500L, "timing"),
+                LyricWord(2_000L, "works")
+            )
+        )
+
+        assertEquals("【Provider】 timing works", LyricWordLayout.karaokeText(line, 0))
+        assertEquals("【Provider】 timing works", LyricWordLayout.karaokeText(line, 1))
+        assertEquals("【Provider】 timing works", LyricWordLayout.karaokeText(line, 2))
+        assertEquals("Provider 【timing】 works", LyricWordLayout.karaokeText(line, 3))
+    }
+
+    @Test
+    fun japaneseCharacterTokensAreGroupedForDisplay() {
+        val text = "君を忘れない"
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = text,
+            words = text.mapIndexed { index, char ->
+                LyricWord(1_000L + index * 150L, char.toString())
+            }
+        )
+
+        assertEquals("【君を】忘れない", LyricWordLayout.karaokeText(line, 0))
+        assertEquals("【君を】忘れない", LyricWordLayout.karaokeText(line, 1))
+        assertEquals("君を【忘れない】", LyricWordLayout.karaokeText(line, 2))
+        assertEquals("君を【忘れない】", LyricWordLayout.karaokeText(line, 5))
+    }
+
+    @Test
+    fun providerTimingTokensRemainUnmodified() {
+        val words = listOf(
+            LyricWord(1_000L, "Pro", 1_100L),
+            LyricWord(1_100L, "vi", 1_200L),
+            LyricWord(1_200L, "der", 1_400L)
+        )
+        val line = LyricLine(1_000L, "Provider", words)
+
+        LyricWordLayout.karaokeText(line, 1)
+
+        assertEquals(words, line.words)
+    }
+
+    @Test
     fun fallsBackToLanguageAppropriateSeparatorWhenAlignmentFails() {
         val english = LyricLine(
             timeMs = 0L,
