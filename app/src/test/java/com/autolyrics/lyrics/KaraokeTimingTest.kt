@@ -35,6 +35,18 @@ class KaraokeTimingTest {
     }
 
     @Test
+    fun endedLatestWordDoesNotReactivateOlderOpenEndedWord() {
+        val words = listOf(
+            LyricWord(timeMs = 1_000L, text = "A"),
+            LyricWord(timeMs = 2_000L, text = "B", endTimeMs = 2_400L)
+        )
+
+        assertEquals(1, KaraokeTiming.activeWordIndex(words, 2_300L))
+        assertEquals(-1, KaraokeTiming.activeWordIndex(words, 2_400L))
+        assertEquals(-1, KaraokeTiming.activeWordIndex(words, 2_800L))
+    }
+
+    @Test
     fun seekingBackwardSelectsEarlierWordAgain() {
         val words = listOf(
             LyricWord(timeMs = 1_000L, text = "A"),
