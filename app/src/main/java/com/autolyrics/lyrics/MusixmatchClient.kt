@@ -96,16 +96,13 @@ object MusixmatchClient {
         if (track.title.isBlank()) return null
 
         val discovered = LinkedHashMap<String, TrackCandidate>()
-        val queries = linkedSetOf(
-            listOf(track.title, track.artist)
-                .filter { it.isNotBlank() }
-                .joinToString(" "),
-            track.title
-        )
+        val artistSearches = listOf(
+            track.artist.takeIf { it.isNotBlank() },
+            null
+        ).distinct()
 
-        for (query in queries) {
-            if (query.isBlank()) continue
-            searchTracks(query).forEach { candidate ->
+        for (artist in artistSearches) {
+            searchTracks(track.title, artist).forEach { candidate ->
                 val key = candidate.trackId?.let { "track:$it" }
                     ?: candidate.commonTrackId?.let { "common:$it" }
                     ?: listOf(candidate.title, candidate.artist, candidate.album)
@@ -278,15 +275,22 @@ object MusixmatchClient {
         return value.isNotBlank() && value.none { it.isLetterOrDigit() }
     }
 
-    private fun searchTracks(query: String): List<TrackCandidate> {
+    private fun searchTracks(title: String, artist: String?): List<TrackCandidate> {
+        val params = linkedMapOf(
+            "q_track" to title,
+            "f_has_lyrics" to "1",
+            "page_size" to SEARCH_PAGE_SIZE.toString(),
+            "page" to "1"
+        )
+        artist?.takeIf { it.isNotBlank() }?.let { params["q_artist"] = it }
+
+        debugLog(
+            "track.search q_track='$title' q_artist='${artist.orEmpty()}'"
+        )
+
         val response = makeRequest(
             endpoint = "track.search",
-            params = linkedMapOf(
-                "q" to query,
-                "f_has_lyrics" to "true",
-                "page_size" to SEARCH_PAGE_SIZE.toString(),
-                "page" to "1"
-            )
+            params = params
         ) ?: return emptyList()
 
         return parseSearchResponse(response)
