@@ -18,6 +18,7 @@ import com.autolyrics.lyrics.LyricsProviderCandidate
 import com.autolyrics.lyrics.LyricsProviderResolver
 import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
+import com.autolyrics.lyrics.MusixmatchClient
 import com.autolyrics.lyrics.PetitLyricsClient
 import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.model.LyricLine
@@ -376,10 +377,14 @@ class MediaTracker private constructor(context: Context) {
         } else {
             null
         }
+        val musixmatchDeferred = async {
+            fetchProviderWithBudget("Musixmatch") { fetchFromMusixmatch(track) }
+        }
 
         val lrcAttempt = lrcLibDeferred.await()
         val petitAttempt = petitLyricsDeferred?.await()
-        val attempts = listOfNotNull(lrcAttempt, petitAttempt)
+        val musixmatchAttempt = musixmatchDeferred.await()
+        val attempts = listOfNotNull(lrcAttempt, petitAttempt, musixmatchAttempt)
         val candidates = attempts.mapNotNull { it.candidate }
 
         val scored = LyricsProviderResolver.scoreCandidates(track, candidates)
@@ -407,6 +412,9 @@ class MediaTracker private constructor(context: Context) {
         }
 
         val selected = LyricsProviderResolver.selectBest(track, candidates)
+        // Musixmatch is an opportunistic third source backed by an unofficial web
+        // endpoint. Do not make its availability shorten the otherwise healthy
+        // cache lifetime of LRCLIB/PetitLyrics results.
         val providerSetComplete = if (PetitLyricsClient.isConfigured) {
             lrcAttempt.candidate != null && petitAttempt?.candidate != null &&
                 !lrcAttempt.timedOut && !petitAttempt.timedOut
@@ -501,6 +509,36 @@ class MediaTracker private constructor(context: Context) {
             source = "PetitLyrics · Synced",
             syncKind = syncKind,
             artistQueryCorroborated = result.artistQueryCorroborated
+        )
+    }
+
+    private fun fetchFromMusixmatch(track: TrackInfo): LyricsProviderCandidate? {
+        val result = try {
+            MusixmatchClient.getLyrics(track)
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
+        if (!hasRealText) return null
+
+        val status = if (result.isRichSync) LyricsStatus.FOUND else LyricsStatus.PLAIN_ONLY
+        val syncKind = when {
+            !result.isRichSync -> LyricsProviderCandidate.SyncKind.PLAIN
+            result.lines.any { it.words.isNotEmpty() } -> LyricsProviderCandidate.SyncKind.WORD_SYNC
+            else -> LyricsProviderCandidate.SyncKind.LINE_SYNC
+        }
+
+        return LyricsProviderCandidate(
+            provider = "Musixmatch",
+            title = result.matchedTitle.ifBlank { track.title },
+            artist = result.matchedArtist,
+            album = result.matchedAlbum,
+            durationSec = result.matchedDurationSec,
+            lines = result.lines,
+            status = status,
+            source = if (result.isRichSync) "Musixmatch · RichSync" else "Musixmatch · Plain",
+            syncKind = syncKind
         )
     }
 
