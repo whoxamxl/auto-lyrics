@@ -97,11 +97,12 @@ class MainActivity : AppCompatActivity() {
 
             val state = mediaTracker.state.value
             val line = state.lines.getOrNull(state.currentIndex)
+            val positionMs = safeCurrentPositionMs()
             if (
                 state.status != LyricsStatus.FOUND ||
                 !state.isPlaying ||
                 line == null ||
-                line.words.isEmpty()
+                !PhoneKaraokeSweep.isAnimating(line, positionMs)
             ) {
                 phoneKaraokeFramesRunning = false
                 return
@@ -653,9 +654,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncPhoneKaraokeFrames(state: LyricsState) {
         val line = state.lines.getOrNull(state.currentIndex)
+        val positionMs = safeCurrentPositionMs()
         val shouldRun = state.status == LyricsStatus.FOUND &&
             state.isPlaying &&
-            line?.words?.isNotEmpty() == true
+            line != null &&
+            PhoneKaraokeSweep.isAnimating(line, positionMs)
 
         if (shouldRun) {
             if (!phoneKaraokeFramesRunning) {
