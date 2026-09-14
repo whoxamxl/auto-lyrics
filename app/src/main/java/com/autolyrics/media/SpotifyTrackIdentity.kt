@@ -4,7 +4,7 @@ import com.autolyrics.model.TrackInfo
 
 /**
  * Extracts a Spotify track ID only from playback metadata that came from the
- * Spotify Android app. Other players remain completely metadata-only.
+ * Spotify Android app and explicitly identifies a track resource.
  */
 object SpotifyTrackIdentity {
 
@@ -18,7 +18,6 @@ object SpotifyTrackIdentity {
         "^https?://open\\.spotify\\.com/track/([A-Za-z0-9]{22})(?:[/?#].*)?$",
         RegexOption.IGNORE_CASE
     )
-    private val ID_PATTERN = Regex("^[A-Za-z0-9]{22}$")
 
     fun trackId(track: TrackInfo): String? {
         if (track.playbackSourcePackage != PACKAGE_NAME) return null
@@ -33,7 +32,6 @@ object SpotifyTrackIdentity {
 
         URI_PATTERN.matchEntire(normalized)?.let { return it.groupValues[1] }
         URL_PATTERN.matchEntire(normalized)?.let { return it.groupValues[1] }
-        if (ID_PATTERN.matches(normalized)) return normalized
 
         return null
     }
