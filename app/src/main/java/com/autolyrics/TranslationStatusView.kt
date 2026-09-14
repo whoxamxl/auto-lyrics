@@ -266,7 +266,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }
 
         if (modelOperation && state.sourceLanguage != null) {
-            refreshDownloadStatus(state.sourceLanguage, state.phase)
+            refreshDownloadStatus(state.sourceLanguage)
             postDelayed(elapsedRefreshRunnable, ELAPSED_REFRESH_MS)
         } else {
             hideDebugDiagnostics()
@@ -288,10 +288,7 @@ class TranslationStatusView @JvmOverloads constructor(
         }, RETRY_TOGGLE_DELAY_MS)
     }
 
-    private fun refreshDownloadStatus(
-        sourceLanguage: String,
-        phase: LyricsTranslator.Phase
-    ) {
+    private fun refreshDownloadStatus(sourceLanguage: String) {
         if (downloadStatusJob?.isActive == true) return
         val activity = hostActivity ?: return
 
@@ -309,7 +306,7 @@ class TranslationStatusView @JvmOverloads constructor(
 
                 applyDownloadProgress(info)
                 if (BuildConfig.DEBUG) {
-                    debugText.text = buildDebugText(info, phase, thermalStatus)
+                    debugText.text = buildDebugText(info, current.phase, thermalStatus)
                     debugText.visibility = View.VISIBLE
                 }
             }
@@ -325,7 +322,11 @@ class TranslationStatusView @JvmOverloads constructor(
                 .toInt()
                 .coerceIn(1, MODEL_TRANSFER_MAX_PERCENT)
             showDeterminateProgress(transferPercent, animate = true)
-        } else {
+        } else if (progressBar.isIndeterminate || progressBar.progress <= 0) {
+            // Once byte progress has started, keep the last determinate value if the
+            // implementation-dependent DownloadManager row briefly disappears. This
+            // also prevents a completed transfer from falling back to an indeterminate
+            // bar while ML Kit installs/verifies the downloaded model.
             showIndeterminateProgress()
         }
     }
@@ -481,6 +482,14 @@ class TranslationStatusView @JvmOverloads constructor(
         if (phase == LyricsTranslator.Phase.WAITING_FOR_SYSTEM) {
             val thermal = compactThermalStatusName(thermalStatus)
             return "0 B / ? · Waiting · Thermal: $thermal"
+        }
+
+        if (!progressBar.isIndeterminate && progressBar.progress > 0) {
+            return if (progressBar.progress >= MODEL_TRANSFER_MAX_PERCENT) {
+                "Transfer complete · Processing"
+            } else {
+                "${progressBar.progress}% · Downloading"
+            }
         }
 
         return when {
