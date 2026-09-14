@@ -3,6 +3,7 @@ package com.autolyrics.lyrics
 import android.content.SharedPreferences
 import android.util.Log
 import com.autolyrics.BuildConfig
+import com.autolyrics.media.SpotifyTrackIdentity
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
@@ -162,10 +163,7 @@ object MusixmatchClient {
         return null
     }
 
-    private fun fetchMacro(
-        track: TrackInfo,
-        prefs: SharedPreferences?
-    ): JsonObject? {
+    internal fun buildMacroParams(track: TrackInfo): LinkedHashMap<String, String> {
         val params = linkedMapOf(
             "namespace" to "lyrics_richsynched",
             "optional_calls" to "track.richsync",
@@ -179,10 +177,22 @@ object MusixmatchClient {
         if (track.durationMs > 0L) {
             params["q_duration"] = (track.durationMs / 1000.0).roundToLong().toString()
         }
+        SpotifyTrackIdentity.trackId(track)?.let { spotifyTrackId ->
+            params["track_spotify_id"] = spotifyTrackId
+        }
+        return params
+    }
+
+    private fun fetchMacro(
+        track: TrackInfo,
+        prefs: SharedPreferences?
+    ): JsonObject? {
+        val params = buildMacroParams(track)
 
         debugLog(
             "mobile macro.subtitles.get q_track='${track.title}' q_artist='${track.artist}' " +
-                "q_album='${params["q_album"].orEmpty()}' q_duration='${params["q_duration"].orEmpty()}'"
+                "q_album='${params["q_album"].orEmpty()}' q_duration='${params["q_duration"].orEmpty()}' " +
+                "spotify_id='${params["track_spotify_id"].orEmpty()}'"
         )
 
         return authenticatedRequest("macro.subtitles.get", params, prefs)

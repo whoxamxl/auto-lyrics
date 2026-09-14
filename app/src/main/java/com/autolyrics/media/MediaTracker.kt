@@ -223,7 +223,33 @@ class MediaTracker private constructor(context: Context) {
         val art = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
 
-        val newTrack = TrackInfo(title, artist, album, duration)
+        val sourcePackage = activeController?.packageName.orEmpty()
+        val isSpotify = sourcePackage == SpotifyTrackIdentity.PACKAGE_NAME
+        val description = metadata.description
+        val sourceMediaId = if (isSpotify) {
+            metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+                ?: description.mediaId
+                ?: ""
+        } else {
+            ""
+        }
+        val sourceMediaUri = if (isSpotify) {
+            metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_URI)
+                ?: description.mediaUri?.toString()
+                ?: ""
+        } else {
+            ""
+        }
+
+        val newTrack = TrackInfo(
+            title = title,
+            artist = artist,
+            album = album,
+            durationMs = duration,
+            playbackSourcePackage = if (isSpotify) sourcePackage else "",
+            playbackSourceMediaId = sourceMediaId,
+            playbackSourceMediaUri = sourceMediaUri
+        )
         val current = _state.value.track
 
         if (current != null && newTrack == current) {
