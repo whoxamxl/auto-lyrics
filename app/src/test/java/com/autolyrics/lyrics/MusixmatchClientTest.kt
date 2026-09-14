@@ -2,6 +2,7 @@ package com.autolyrics.lyrics
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -91,6 +92,93 @@ class MusixmatchClientTest {
         assertEquals(431.0, result.candidate.durationSec ?: 0.0, 0.001)
         assertTrue(result.candidate.hasRichSync)
         assertEquals("[00:01.00]Hey Jude\n[00:03.00]Don't make it bad", result.subtitleBody)
+    }
+
+    @Test
+    fun capturesRichSyncEmbeddedInMacroResponse() {
+        val richSyncBody = """[{"ts":1.5,"x":"Hey Jude","l":[{"c":"Hey","o":0.0},{"c":"Jude","o":0.5}]}]"""
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        val json = """
+            {
+              "message": {
+                "header": {"status_code": 200},
+                "body": {
+                  "macro_calls": {
+                    "matcher.track.get": {
+                      "message": {
+                        "header": {"status_code": 200},
+                        "body": {
+                          "track": {
+                            "track_id": 123,
+                            "commontrack_id": 456,
+                            "track_name": "Hey Jude",
+                            "artist_name": "The Beatles",
+                            "album_name": "1",
+                            "track_length": 431,
+                            "has_richsync": 1,
+                            "instrumental": 0
+                          }
+                        }
+                      }
+                    },
+                    "track.richsync.get": {
+                      "message": {
+                        "header": {"status_code": 200},
+                        "body": {
+                          "richsync": {
+                            "richsync_body": "$richSyncBody"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val result = MusixmatchClient.parseMacroResponse(json)
+
+        assertNotNull(result)
+        assertNotNull(result!!.richSyncResponseJson)
+        val lines = MusixmatchClient.parseRichSyncResponse(result.richSyncResponseJson!!)
+        assertEquals(1, lines.size)
+        assertEquals("Hey Jude", lines[0].text)
+        assertEquals(1_500L, lines[0].timeMs)
+    }
+
+    @Test
+    fun rejectsMacroWhenMatcherTrackCallFails() {
+        val json = """
+            {
+              "message": {
+                "header": {"status_code": 200},
+                "body": {
+                  "macro_calls": {
+                    "matcher.track.get": {
+                      "message": {
+                        "header": {"status_code": 404},
+                        "body": {}
+                      }
+                    },
+                    "track.subtitles.get": {
+                      "message": {
+                        "header": {"status_code": 200},
+                        "body": {
+                          "subtitle_list": [
+                            {"subtitle": {"subtitle_body": "[00:01.00]Wrong song"}}
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        assertNull(MusixmatchClient.parseMacroResponse(json))
     }
 
     @Test
