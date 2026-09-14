@@ -105,11 +105,7 @@ object MusixmatchClient {
 
         logMatchDiagnostics(track, candidate)
 
-        if (
-            requestedSpotifyTrackId != null &&
-            candidate.spotifyTrackId.isNotBlank() &&
-            !candidate.spotifyTrackId.equals(requestedSpotifyTrackId, ignoreCase = true)
-        ) {
+        if (!spotifyIdentityCompatible(requestedSpotifyTrackId, candidate.spotifyTrackId)) {
             debugLog(
                 "mobile macro match rejected: spotify id mismatch " +
                     "requested=$requestedSpotifyTrackId matched=${candidate.spotifyTrackId}"
@@ -195,6 +191,15 @@ object MusixmatchClient {
             params["track_spotify_id"] = spotifyTrackId
         }
         return params
+    }
+
+    internal fun spotifyIdentityCompatible(
+        requestedSpotifyTrackId: String?,
+        matchedSpotifyTrackId: String
+    ): Boolean {
+        return requestedSpotifyTrackId == null ||
+            matchedSpotifyTrackId.isBlank() ||
+            matchedSpotifyTrackId == requestedSpotifyTrackId
     }
 
     private fun fetchMacro(
