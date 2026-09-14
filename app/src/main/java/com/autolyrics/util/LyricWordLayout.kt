@@ -66,7 +66,15 @@ object LyricWordLayout {
         val words = line.words
         if (words.isEmpty() || activeWordIndex !in words.indices) return line.text
 
-        val displayRange = displayRangeForToken(line, activeWordIndex)
+        // Preserve the legacy rendered-token fallback when the provider timing
+        // payload is completely unrelated to the line text. Range estimation is
+        // intended for partial/cosmetic mismatches, not to replace all semantics.
+        val hasAlignedToken = locateTokensBestEffort(line).any { it != null }
+        val displayRange = if (hasAlignedToken) {
+            displayRangeForToken(line, activeWordIndex)
+        } else {
+            null
+        }
         if (displayRange != null) {
             return buildString(line.text.length + openMarker.length + closeMarker.length) {
                 append(line.text, 0, displayRange.start)
