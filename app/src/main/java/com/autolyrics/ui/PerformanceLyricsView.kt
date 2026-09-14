@@ -56,6 +56,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
     private var trackDurationMs = 0L
     private var message: String? = null
     private var targetLine = 0
+    private var activeLine = -1
     private var lastLinesIdentity = 0
 
     private var animIndex = 0f
@@ -73,7 +74,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
         val layout: StaticLayout,
         val text: String,
         val tokenDisplayStart: IntArray,
-        val tokenDisplayEnd: IntArray
+        val tokenDisplayEnd: IntArray,
+        val maxScale: Float
     )
 
     private var layouts: List<LineLayout> = emptyList()
@@ -107,6 +109,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
         if (identityChanged) {
             lastLinesIdentity = linesId
             targetLine = 0
+            activeLine = -1
             targetIndex = 0f
             animIndex = 0f
             animVelocity = 0f
@@ -116,7 +119,18 @@ class PerformanceLyricsView @JvmOverloads constructor(
     }
 
     fun setActiveLine(index: Int) {
+        if (index < 0) {
+            activeLine = -1
+            targetLine = 0
+            if (abs(animIndex) > SNAP_JUMP_LINES) {
+                animIndex = 0f
+                animVelocity = 0f
+            }
+            resume()
+            return
+        }
         if (index !in lines.indices) return
+        activeLine = index
         targetLine = index
         if (abs(index - animIndex) > SNAP_JUMP_LINES) {
             animIndex = index.toFloat()
@@ -176,9 +190,22 @@ class PerformanceLyricsView @JvmOverloads constructor(
                 displayEnds[tokenIndex] = displayRange?.end ?: rendered.tokenEnd[tokenIndex]
             }
 
+            val widestLine = (0 until layout.lineCount)
+                .maxOfOrNull { visualLine -> layout.getLineWidth(visualLine) }
+                ?.coerceAtLeast(1f)
+                ?: 1f
+            val maxScale = (availableWidth.toFloat() / widestLine)
+                .coerceIn(INACTIVE_SCALE, ACTIVE_SCALE)
+
             newTops[index] = runningTop
             newCenters[index] = runningTop + layout.height / 2f
-            newLayouts += LineLayout(layout, rendered.text, displayStarts, displayEnds)
+            newLayouts += LineLayout(
+                layout,
+                rendered.text,
+                displayStarts,
+                displayEnds,
+                maxScale
+            )
             runningTop += layout.height + spToPx(INTER_LINE_GAP_SP)
         }
 
@@ -267,7 +294,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
         if (!settled) return true
         if (!isPlaying) return false
         if (plainMode) return trackDurationMs > 0L
-        return lines.getOrNull(targetLine)?.words?.isNotEmpty() == true
+        return lines.getOrNull(activeLine)?.words?.isNotEmpty() == true
     }
 
     private fun centerOf(index: Float): Float {
@@ -332,9 +359,14 @@ class PerformanceLyricsView @JvmOverloads constructor(
                 return@forEach
             }
 
-            val focus = smoothstep((1f - abs(index - animIndex)).coerceIn(0f, 1f))
-            val scale = INACTIVE_SCALE + (ACTIVE_SCALE - INACTIVE_SCALE) * focus
-            val activeKaraoke = !plainMode && index == targetLine &&
+            val focus = if (!plainMode && activeLine < 0) {
+                0f
+            } else {
+                smoothstep((1f - abs(index - animIndex)).coerceIn(0f, 1f))
+            }
+            val desiredScale = INACTIVE_SCALE + (ACTIVE_SCALE - INACTIVE_SCALE) * focus
+            val scale = minOf(desiredScale, lineLayout.maxScale)
+            val activeKaraoke = !plainMode && index == activeLine &&
                 lineLayout.tokenDisplayStart.isNotEmpty()
             val alpha = if (activeKaraoke) 1f else INACTIVE_ALPHA + (1f - INACTIVE_ALPHA) * focus
             val color = if (activeKaraoke) activeColor else lerpColor(inactiveColor, activeColor, focus)
