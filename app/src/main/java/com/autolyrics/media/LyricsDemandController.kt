@@ -1,20 +1,29 @@
 package com.autolyrics.media
 
 /**
- * Tracks whether lyrics are currently useful to a visible phone UI or an
- * Android Auto projection session.
+ * Process-wide demand state for lyric work.
  *
- * Media-session tracking remains independent from this state. The callback is
- * only for gating lyrics/cache/provider work in [MediaTracker].
+ * Demand is active while at least one phone Activity is started or while the
+ * device is projecting to Android Auto. MediaListenerService keeps monitoring
+ * sessions independently and only forwards them to MediaTracker while this
+ * demand is active.
  */
-internal class LyricsDemandController(
-    private val onActiveChanged: (Boolean) -> Unit
-) {
+internal object LyricsDemandController {
     private var startedPhoneActivities = 0
     private var carProjectionConnected = false
+    private val listeners = linkedSetOf<(Boolean) -> Unit>()
 
     var isActive: Boolean = false
         private set
+
+    fun addListener(listener: (Boolean) -> Unit) {
+        listeners += listener
+        listener(isActive)
+    }
+
+    fun removeListener(listener: (Boolean) -> Unit) {
+        listeners -= listener
+    }
 
     fun onPhoneActivityStarted() {
         startedPhoneActivities += 1
@@ -39,6 +48,13 @@ internal class LyricsDemandController(
         if (next == isActive) return
 
         isActive = next
-        onActiveChanged(next)
+        listeners.toList().forEach { it(next) }
+    }
+
+    internal fun resetForTest() {
+        startedPhoneActivities = 0
+        carProjectionConnected = false
+        isActive = false
+        listeners.clear()
     }
 }
