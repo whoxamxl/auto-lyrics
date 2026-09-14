@@ -69,7 +69,7 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         private const val SYNC_STEP_MS = 50L
         private const val SYNC_WINDOW_SIZE = 3
         private const val DEFAULT_WINDOW_SIZE = 5
-        private const val TRANSLATED_WINDOW_SIZE = 3
+        private const val TRANSLATED_WINDOW_SIZE = 5
         private const val CURRENT_LINE_PREFIX = "▶  "
         // Em + en spacing approximates the rendered width of the current-line marker
         // so lyric text starts at the same x-position on surrounding rows.
@@ -420,10 +420,18 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
 
     private fun buildTextItem(id: String, text: String, pad: Boolean = false, subtitle: String? = null): MediaBrowserCompat.MediaItem {
         val title = if (pad) text.padEnd(PAD_WIDTH) else text
+        val alignedSubtitle = if (
+            !subtitle.isNullOrBlank() &&
+            (id.startsWith("line_") || id.startsWith("sync_line_"))
+        ) {
+            "$IDLE_LINE_PREFIX$subtitle"
+        } else {
+            subtitle
+        }
         val builder = MediaDescriptionCompat.Builder()
             .setMediaId(id)
             .setTitle(title)
-        if (!subtitle.isNullOrBlank()) builder.setSubtitle(subtitle)
+        if (!alignedSubtitle.isNullOrBlank()) builder.setSubtitle(alignedSubtitle)
         return MediaBrowserCompat.MediaItem(
             builder.build(),
             MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
