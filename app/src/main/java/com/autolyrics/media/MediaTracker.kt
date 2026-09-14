@@ -21,6 +21,7 @@ import com.autolyrics.lyrics.LyricsTranslator
 import com.autolyrics.lyrics.MetadataCleaner
 import com.autolyrics.lyrics.MusixmatchClient
 import com.autolyrics.lyrics.PetitLyricsClient
+import com.autolyrics.lyrics.SyncLrcClient
 import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricsState
@@ -394,11 +395,19 @@ class MediaTracker private constructor(context: Context) {
         val musixmatchDeferred = async {
             fetchProviderWithBudget("Musixmatch") { fetchFromMusixmatch(track) }
         }
+        val syncLrcDeferred = if (preferWordSync) {
+            async {
+                fetchProviderWithBudget("SyncLRC") { fetchFromSyncLrc(track) }
+            }
+        } else {
+            null
+        }
 
         val lrcAttempt = lrcLibDeferred.await()
         val petitAttempt = petitLyricsDeferred?.await()
         val musixmatchAttempt = musixmatchDeferred.await()
-        val attempts = listOfNotNull(lrcAttempt, petitAttempt, musixmatchAttempt)
+        val syncLrcAttempt = syncLrcDeferred?.await()
+        val attempts = listOfNotNull(lrcAttempt, petitAttempt, musixmatchAttempt, syncLrcAttempt)
         val candidates = attempts.mapNotNull { it.candidate }
 
         val scored = LyricsProviderResolver.scoreCandidates(track, candidates)
@@ -430,16 +439,21 @@ class MediaTracker private constructor(context: Context) {
             candidates = candidates,
             preferWordSync = preferWordSync
         )
-        // Musixmatch is an opportunistic third source backed by an unofficial
-        // mobile endpoint. Do not make its availability shorten the otherwise
-        // healthy cache lifetime of LRCLIB/PetitLyrics results.
+        // Musixmatch and SyncLRC are opportunistic word-sync sources. Keep the
+        // ordinary cache-health decision anchored to LRCLIB/PetitLyrics, but use a
+        // short-lived Karaoke cache when no usable word-timed result was found so
+        // a transient aggregator/provider miss does not pin LINE_SYNC for a week.
         val providerSetComplete = if (PetitLyricsClient.isConfigured) {
             lrcAttempt.candidate != null && petitAttempt?.candidate != null &&
                 !lrcAttempt.timedOut && !petitAttempt.timedOut
         } else {
             !lrcAttempt.timedOut
         }
-        val refreshAfterMs = if (providerSetComplete) {
+        val selectedHasWordTiming = selected?.candidate?.let {
+            LyricsProviderResolver.hasUsableWordTiming(it)
+        } == true
+        val karaokeNeedsRetry = preferWordSync && !selectedHasWordTiming
+        val refreshAfterMs = if (providerSetComplete && !karaokeNeedsRetry) {
             LyricsCache.DEFAULT_REFRESH_AFTER_MS
         } else {
             PROVISIONAL_CACHE_REFRESH_MS
@@ -558,6 +572,31 @@ class MediaTracker private constructor(context: Context) {
             status = LyricsStatus.FOUND,
             source = if (result.isRichSync) "Musixmatch · RichSync" else "Musixmatch · Line",
             syncKind = syncKind,
+            artistQueryCorroborated = result.artistQueryCorroborated
+        )
+    }
+
+    private fun fetchFromSyncLrc(track: TrackInfo): LyricsProviderCandidate? {
+        val result = try {
+            SyncLrcClient.getKaraokeLyrics(track)
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val hasRealText = result.lines.any { it.text != "♪" && it.text.isNotBlank() }
+        val hasWordTiming = result.lines.any { it.words.isNotEmpty() }
+        if (!hasRealText || !hasWordTiming) return null
+
+        return LyricsProviderCandidate(
+            provider = "SyncLRC",
+            title = result.matchedTitle.ifBlank { track.title },
+            artist = result.matchedArtist,
+            album = result.matchedAlbum,
+            durationSec = result.matchedDurationSec,
+            lines = result.lines,
+            status = LyricsStatus.FOUND,
+            source = "SyncLRC · Karaoke",
+            syncKind = LyricsProviderCandidate.SyncKind.WORD_SYNC,
             artistQueryCorroborated = result.artistQueryCorroborated
         )
     }
