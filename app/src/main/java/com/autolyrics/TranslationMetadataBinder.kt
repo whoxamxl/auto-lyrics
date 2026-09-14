@@ -4,11 +4,11 @@ import android.content.Context
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.Job
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.autolyrics.lyrics.TranslationLanguages
 import com.autolyrics.media.MediaTracker
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.WeakHashMap
 
@@ -17,7 +17,7 @@ import java.util.WeakHashMap
  * translation target without coupling MainActivity to translation settings.
  */
 object TranslationMetadataBinder {
-    private val jobs = WeakHashMap<AppCompatActivity, kotlinx.coroutines.Job>()
+    private val jobs = WeakHashMap<AppCompatActivity, Job>()
 
     fun install(activity: AppCompatActivity) {
         if (jobs[activity]?.isActive == true) return
