@@ -14,15 +14,15 @@ import kotlin.math.roundToInt
 /**
  * Karaoke-only client for the public SyncLRC API.
  *
- * SyncLRC can fall back from a requested `karaoke` response to synced/plain
- * lyrics. Auto Lyrics deliberately rejects those fallbacks here because LRCLIB
- * already covers line/plain lyrics directly; this provider exists only to widen
- * genuine Enhanced-LRC / word-timed coverage.
+ * The current public API returns separate `karaoke`, `synced`, and `plain`
+ * fields. Older deployments returned a type-specific `lyrics` + `type` shape.
+ * Both are accepted for compatibility, but only a genuine karaoke payload is
+ * ever promoted to an Auto Lyrics provider candidate.
  */
 object SyncLrcClient {
 
     private const val TAG = "SyncLRC"
-    private const val BASE_URL = "https://synclrc.dev/lyrics"
+    private const val BASE_URL = "https://api.synclrc.dev/lyrics"
 
     private val gson = Gson()
     private val client = OkHttpClient.Builder()
@@ -41,6 +41,9 @@ object SyncLrcClient {
     )
 
     internal data class ApiResponse(
+        val karaoke: String? = null,
+        val synced: String? = null,
+        val plain: String? = null,
         val lyrics: String? = null,
         val type: String? = null,
         val id: String? = null,
@@ -107,15 +110,25 @@ object SyncLrcClient {
             return null
         }
 
-        // The API intentionally falls back when karaoke is unavailable. Reject
-        // that fallback so SyncLRC never duplicates LRCLIB LINE_SYNC/PLAIN data.
-        if (!response.type.equals("karaoke", ignoreCase = true)) {
-            debugLog("response has no karaoke payload; type=${response.type.orEmpty()}")
+        val karaokeLyrics = response.karaoke
+            ?.takeIf { it.isNotBlank() }
+            ?: response.lyrics
+                ?.takeIf {
+                    it.isNotBlank() && response.type.equals("karaoke", ignoreCase = true)
+                }
+
+        // A type=karaoke request can still contain only synced/plain data. LRCLIB
+        // already covers those formats directly, so SyncLRC contributes only when
+        // a genuine Enhanced-LRC karaoke payload is present.
+        if (karaokeLyrics == null) {
+            debugLog(
+                "response has no karaoke payload; legacyType=${response.type.orEmpty()} " +
+                    "synced=${!response.synced.isNullOrBlank()} plain=${!response.plain.isNullOrBlank()}"
+            )
             return null
         }
 
-        val lyrics = response.lyrics?.takeIf { it.isNotBlank() } ?: return null
-        val lines = LrcParser.parseKaraoke(lyrics)
+        val lines = LrcParser.parseKaraoke(karaokeLyrics)
         if (lines.none { it.words.isNotEmpty() }) {
             debugLog("karaoke payload rejected: no timed tokens")
             return null
