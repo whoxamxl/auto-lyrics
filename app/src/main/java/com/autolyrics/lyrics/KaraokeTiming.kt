@@ -6,23 +6,23 @@ import com.autolyrics.model.LyricWord
 object KaraokeTiming {
 
     fun activeWordIndex(words: List<LyricWord>, positionMs: Long): Int {
-        var activeIndex = -1
-        var latestStart = Long.MIN_VALUE
-
-        words.forEachIndexed { index, word ->
-            if (word.timeMs > positionMs) return@forEachIndexed
-
-            val explicitEnd = word.endTimeMs
-            if (explicitEnd != null && positionMs >= explicitEnd) {
-                return@forEachIndexed
-            }
-
-            if (word.timeMs >= latestStart) {
-                latestStart = word.timeMs
-                activeIndex = index
+        var latestIndex = -1
+        for (index in words.indices) {
+            if (words[index].timeMs <= positionMs) {
+                latestIndex = index
+            } else {
+                break
             }
         }
 
-        return activeIndex
+        if (latestIndex < 0) return -1
+
+        val latestWord = words[latestIndex]
+        val explicitEnd = latestWord.endTimeMs
+        return if (explicitEnd != null && positionMs >= explicitEnd) {
+            -1
+        } else {
+            latestIndex
+        }
     }
 }
