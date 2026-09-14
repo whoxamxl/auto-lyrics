@@ -18,7 +18,6 @@ internal object LyricsDemandController {
 
     fun addListener(listener: (Boolean) -> Unit) {
         listeners += listener
-        listener(isActive)
     }
 
     fun removeListener(listener: (Boolean) -> Unit) {
