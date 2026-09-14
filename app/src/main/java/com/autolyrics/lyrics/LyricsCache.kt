@@ -1,11 +1,11 @@
 package com.autolyrics.lyrics
 
 import android.content.Context
-import com.autolyrics.media.SpotifyTrackIdentity
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
 import com.autolyrics.model.LyricsStatus
 import com.autolyrics.model.TrackInfo
+import com.autolyrics.util.SpotifyTrackIdentity
 import com.google.gson.Gson
 import java.io.File
 import java.text.Normalizer
