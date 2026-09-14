@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.SpannableStringBuilder
 import android.text.Spanned
-import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
@@ -39,7 +38,8 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.AlbumColors
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
-import com.autolyrics.util.LyricWordLayout
+import com.autolyrics.ui.KaraokeSweepSpan
+import com.autolyrics.ui.PhoneKaraokeSweep
 import com.autolyrics.util.SyncCalibration
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
@@ -89,6 +89,29 @@ class MainActivity : AppCompatActivity() {
     private var tapSyncTargetIndices: List<Int> = emptyList()
     private var tapSyncTrackKey: String? = null
     private var activeUndoSnackbar: Snackbar? = null
+    private var phoneKaraokeFramesRunning = false
+
+    private val phoneKaraokeFrameRunnable = object : Runnable {
+        override fun run() {
+            if (!phoneKaraokeFramesRunning) return
+
+            val state = mediaTracker.state.value
+            val line = state.lines.getOrNull(state.currentIndex)
+            val positionMs = safeCurrentPositionMs()
+            if (
+                state.status != LyricsStatus.FOUND ||
+                !state.isPlaying ||
+                line == null ||
+                !PhoneKaraokeSweep.isAnimating(line, positionMs)
+            ) {
+                phoneKaraokeFramesRunning = false
+                return
+            }
+
+            tvLyrics.invalidate()
+            tvLyrics.postOnAnimation(this)
+        }
+    }
 
     private val fontButtons = mutableMapOf<String, Button>()
     private val scrollResetRunnable = Runnable {
@@ -363,6 +386,8 @@ class MainActivity : AppCompatActivity() {
                             startPlainScroll(state)
                         }
                     }
+
+                    syncPhoneKaraokeFrames(state)
                 }
             }
         }
@@ -503,14 +528,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSyncedLyrics(state: LyricsState) {
         val ssb = SpannableStringBuilder()
-        val hasKaraoke = state.lines.any { it.words.isNotEmpty() }
         val colors = state.albumColors
         val highlightColor = colors?.vibrant ?: DEFAULT_HIGHLIGHT
-        val highlightBg = setAlpha(highlightColor, 0.2f)
         val dimColor = colors?.textDim ?: DEFAULT_DIM
+        val positionMs = safeCurrentPositionMs()
 
         state.lines.forEachIndexed { i, line ->
+            val isPastLine = state.currentIndex >= 0 && i < state.currentIndex
             val isCurrentLine = i == state.currentIndex
+            val isFutureLine = state.currentIndex < 0 || i > state.currentIndex
             val lineStart = ssb.length
 
             if (isCurrentLine) {
@@ -519,53 +545,73 @@ class MainActivity : AppCompatActivity() {
                 ssb.append("    ")
             }
 
-            if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
-                val layout = LyricWordLayout.layout(line)
-                line.words.forEachIndexed { wi, word ->
-                    ssb.append(layout.prefixes.getOrElse(wi) { "" })
-                    val wordStart = ssb.length
-                    ssb.append(word.text)
-                    val wordEnd = ssb.length
+            val lyricStart = ssb.length
+            ssb.append(line.text)
+            val lyricEnd = ssb.length
 
-                    if (wi == state.currentWordIndex) {
-                        ssb.setSpan(
-                            StyleSpan(Typeface.BOLD),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            ForegroundColorSpan(highlightColor),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            BackgroundColorSpan(highlightBg),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    }
-                }
-                ssb.append(layout.suffix)
+            if (isPastLine) {
                 ssb.setSpan(
-                    StyleSpan(Typeface.BOLD),
-                    lineStart, ssb.length,
+                    ForegroundColorSpan(highlightColor),
+                    lyricStart, lyricEnd,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
-            } else {
-                ssb.append(line.text)
-                if (isCurrentLine) {
+            } else if (isCurrentLine) {
+                ssb.setSpan(
+                    StyleSpan(Typeface.BOLD),
+                    lineStart, lyricEnd,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+
+                if (line.words.isEmpty()) {
                     ssb.setSpan(
-                        StyleSpan(Typeface.BOLD),
-                        lineStart, ssb.length,
+                        ForegroundColorSpan(highlightColor),
+                        lyricStart, lyricEnd,
                         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
-                }
-            }
+                } else {
+                    val sweep = PhoneKaraokeSweep.segmentAtPosition(line, positionMs)
+                    if (sweep == null) {
+                        ssb.setSpan(
+                            ForegroundColorSpan(dimColor),
+                            lyricStart, lyricEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    } else {
+                        if (sweep.start > 0) {
+                            ssb.setSpan(
+                                ForegroundColorSpan(highlightColor),
+                                lyricStart,
+                                lyricStart + sweep.start,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
 
-            if (!isCurrentLine) {
+                        ssb.setSpan(
+                            KaraokeSweepSpan(
+                                segment = sweep,
+                                pendingColor = dimColor,
+                                completedColor = highlightColor,
+                                positionProvider = ::safeCurrentPositionMs
+                            ),
+                            lyricStart + sweep.start,
+                            lyricStart + sweep.end,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+
+                        if (sweep.end < line.text.length) {
+                            ssb.setSpan(
+                                ForegroundColorSpan(dimColor),
+                                lyricStart + sweep.end,
+                                lyricEnd,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                    }
+                }
+            } else if (isFutureLine) {
                 ssb.setSpan(
                     ForegroundColorSpan(dimColor),
-                    lineStart, ssb.length,
+                    lineStart, lyricEnd,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
@@ -600,6 +646,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun safeCurrentPositionMs(): Long = try {
+        mediaTracker.getCurrentPositionMs()
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun syncPhoneKaraokeFrames(state: LyricsState) {
+        val line = state.lines.getOrNull(state.currentIndex)
+        val positionMs = safeCurrentPositionMs()
+        val shouldRun = state.status == LyricsStatus.FOUND &&
+            state.isPlaying &&
+            line != null &&
+            PhoneKaraokeSweep.isAnimating(line, positionMs)
+
+        if (shouldRun) {
+            if (!phoneKaraokeFramesRunning) {
+                phoneKaraokeFramesRunning = true
+                tvLyrics.postOnAnimation(phoneKaraokeFrameRunnable)
+            }
+        } else {
+            stopPhoneKaraokeFrames()
+        }
+    }
+
+    private fun stopPhoneKaraokeFrames() {
+        phoneKaraokeFramesRunning = false
+        if (::tvLyrics.isInitialized) {
+            tvLyrics.removeCallbacks(phoneKaraokeFrameRunnable)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         aaOffsetMs = prefs.getLong(AA_OFFSET_PREF_KEY, 0L)
@@ -607,9 +684,15 @@ class MainActivity : AppCompatActivity() {
         updatePermissionUi()
     }
 
+    override fun onStop() {
+        stopPhoneKaraokeFrames()
+        super.onStop()
+    }
+
     override fun onDestroy() {
         dismissUndoSnackbar()
         prefs.unregisterOnSharedPreferenceChangeListener(aaPrefsListener)
+        stopPhoneKaraokeFrames()
         stopPlainScroll()
         super.onDestroy()
     }
@@ -924,10 +1007,5 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIVIDER = Color.parseColor("#2A2A3A")
         private val DEFAULT_HIGHLIGHT = Color.parseColor("#FFD54F")
         private val DEFAULT_DIM = Color.parseColor("#99FFFFFF")
-
-        private fun setAlpha(color: Int, alpha: Float): Int {
-            val a = (alpha * 255).toInt().coerceIn(0, 255)
-            return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
-        }
     }
 }

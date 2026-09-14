@@ -21,7 +21,7 @@ object LyricWordLayout {
         val suffix: String
     )
 
-    private data class TextRange(
+    internal data class DisplayRange(
         val start: Int,
         val end: Int
     )
@@ -90,7 +90,15 @@ object LyricWordLayout {
         }
     }
 
-    private fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): TextRange? {
+    /**
+     * Returns the human-readable character range that should be highlighted for
+     * a provider timing token. The range is expressed against [LyricLine.text]
+     * with an exclusive [DisplayRange.end].
+     *
+     * This is internal so renderers can share the exact same grouping logic as
+     * [karaokeText] without exposing timing/display coupling as public API.
+     */
+    internal fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): DisplayRange? {
         val tokenSpans = locateTokens(line) ?: return null
         val token = tokenSpans.getOrNull(activeTokenIndex) ?: return null
         val ranges = lexicalRanges(line.text)
@@ -104,7 +112,7 @@ object LyricWordLayout {
         // Keep the visible word stable through those tiny bridge tokens by mapping
         // them to the nearest lexical range, preferring the preceding word on ties.
         return ranges.minWithOrNull(
-            compareBy<TextRange> { distance(token, it) }
+            compareBy<DisplayRange> { distance(token, it) }
                 .thenBy { if (it.end <= token.start) 0 else 1 }
         )
     }
@@ -124,20 +132,20 @@ object LyricWordLayout {
         return spans
     }
 
-    private fun lexicalRanges(text: String): List<TextRange> {
+    private fun lexicalRanges(text: String): List<DisplayRange> {
         if (text.isBlank()) return emptyList()
 
         val locale = if (JAPANESE_SCRIPT.containsMatchIn(text)) Locale.JAPANESE else Locale.ROOT
         val iterator = BreakIterator.getWordInstance(locale)
         iterator.setText(text)
 
-        val rawRanges = ArrayList<TextRange>()
+        val rawRanges = ArrayList<DisplayRange>()
         var start = iterator.first()
         var end = iterator.next()
         while (end != BreakIterator.DONE) {
             val segment = text.substring(start, end)
             if (segment.any { it.isLetterOrDigit() } || JAPANESE_SCRIPT.containsMatchIn(segment)) {
-                rawRanges += TextRange(start, end)
+                rawRanges += DisplayRange(start, end)
             }
             start = end
             end = iterator.next()
@@ -149,14 +157,14 @@ object LyricWordLayout {
         // as separate ranges (e.g. 忘 + れない). Merge an adjacent hiragana suffix
         // into a preceding kanji-containing range. This is intentionally a display
         // heuristic only; the original per-token timestamps remain available.
-        val merged = ArrayList<TextRange>(rawRanges.size)
+        val merged = ArrayList<DisplayRange>(rawRanges.size)
         for (range in rawRanges) {
             val currentText = text.substring(range.start, range.end)
             val previous = merged.lastOrNull()
             if (previous != null && previous.end == range.start) {
                 val previousText = text.substring(previous.start, previous.end)
                 if (HAN_SCRIPT.containsMatchIn(previousText) && HIRAGANA_ONLY.matches(currentText)) {
-                    merged[merged.lastIndex] = TextRange(previous.start, range.end)
+                    merged[merged.lastIndex] = DisplayRange(previous.start, range.end)
                     continue
                 }
             }
@@ -165,7 +173,7 @@ object LyricWordLayout {
         return merged
     }
 
-    private fun distance(token: TokenSpan, range: TextRange): Int {
+    private fun distance(token: TokenSpan, range: DisplayRange): Int {
         return when {
             token.end <= range.start -> range.start - token.end
             range.end <= token.start -> token.start - range.end
