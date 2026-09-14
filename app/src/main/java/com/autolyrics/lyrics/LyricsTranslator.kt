@@ -156,6 +156,10 @@ object LyricsTranslator {
     ): TranslationResult? {
         val target = TranslationLanguages.normalizeTargetLanguage(targetLanguage)
         Log.d(TAG, "translateLines start: lines=${lines.size} target=$target")
+        // A newly requested track/target immediately owns the foreground status, even
+        // before language detection finishes. Older model monitors must continue only
+        // in the background and must not reclaim the status UI during early-return paths.
+        statusOwnerRequest = null
         updateState(Phase.DETECTING_LANGUAGE, targetLanguage = target)
 
         val sampleText = lines
