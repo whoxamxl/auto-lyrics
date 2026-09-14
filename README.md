@@ -12,7 +12,7 @@ Auto Lyrics is an Android app that follows the active media session and displays
 - **Multi-provider resolution** — LRCLIB, Musixmatch, configured PetitLyrics, and Karaoke-only SyncLRC candidates are compared using metadata match, lyric quality, and source confidence.
 - **Karaoke-aware selection** — normal mode remains accuracy-first; Karaoke mode may prefer a real WORD_SYNC candidate when its recording match and payload quality are near-equivalent to the normal winner.
 - **Musixmatch RichSync** — when available, Musixmatch word-level timing is exposed as karaoke/word sync; line-synchronized subtitles are used as fallback.
-- **SyncLRC Enhanced LRC** — Karaoke mode can query SyncLRC for additional fine-grained timing sourced through its LRCLIB/LDDC/syncedlyrics stack. Synced/plain fallbacks from that request are intentionally ignored.
+- **SyncLRC Enhanced LRC** — Karaoke mode can query SyncLRC for additional fine-grained timing sourced through its LRCLIB/LDDC/syncedlyrics stack. Synced/plain-only responses are intentionally ignored.
 - **Timing-token / display-word separation** — providers may timestamp a whole word, syllable, fragment, or individual character. Raw timestamps are retained, while the renderer groups fine tokens into human-readable display words/phrases.
 - **Script-aware rendering** — English, Japanese, and mixed-script lines preserve the provider's original text and spacing without synthetic spaces.
 - **Synced and plain fallback** — synchronized lyrics are preferred; LRCLIB plain text remains a last-resort fallback.
@@ -152,7 +152,7 @@ Shows detailed information such as title, artist, album, provider, synchronizati
 1. The active media session provides title, artist, album, duration, playback state, and position.
 2. Metadata is cleaned before lookup.
 3. LRCLIB and Musixmatch are launched in parallel; configured PetitLyrics joins them. When Karaoke mode is enabled, SyncLRC is launched in the same comparison as an additional word-timing source.
-4. Provider-specific lookup logic gathers plausible candidates. Musixmatch locally validates the matcher result from its mobile macro response. SyncLRC is accepted only when its type-specific response is genuinely `karaoke` and contains Enhanced-LRC timing tokens.
+4. Provider-specific lookup logic gathers plausible candidates. Musixmatch locally validates the matcher result from its mobile macro response. SyncLRC is accepted only when the response contains a genuine Enhanced-LRC `karaoke` payload.
 5. `LyricsProviderResolver` validates metadata and compares candidate quality/source confidence.
 6. In normal mode, the highest-quality synchronized recording match wins. In Karaoke mode, a real WORD_SYNC candidate can replace that winner only when metadata and payload quality remain near-equivalent.
 7. The selected result is cached in a mode-specific cache variant. Karaoke falls back to a shorter refresh interval when no usable word timing was found, so a transient provider miss does not pin LINE_SYNC for a week.
@@ -214,7 +214,7 @@ Musixmatch integration uses an unofficial/internal API surface and may change in
 Karaoke mode can query the public [SyncLRC](https://github.com/TharukRenuja/SyncLRC) API:
 
 ```text
-GET https://synclrc.dev/lyrics
+GET https://api.synclrc.dev/lyrics
     ?track=...
     &artist=...
     &type=karaoke
@@ -222,14 +222,18 @@ GET https://synclrc.dev/lyrics
     [&duration=...]
 ```
 
+The current public API returns canonical metadata plus separate `karaoke`, `synced`, and `plain` fields. Auto Lyrics uses only a non-empty `karaoke` payload. For compatibility with older SyncLRC deployments, the client can also read the former `type=karaoke` + `lyrics` response shape.
+
 SyncLRC documents Karaoke as Enhanced LRC and uses LRCLIB plus LDDC/syncedlyrics-backed sources such as NetEase, QQ Music, Kugou, and Musixmatch. Auto Lyrics does **not** embed or copy that upstream code; it consumes the public JSON API.
 
-The SyncLRC endpoint intentionally falls back to synced/plain lyrics when Karaoke is unavailable. Auto Lyrics rejects those fallback response types for this provider because direct LRCLIB already covers LINE_SYNC/plain. A SyncLRC candidate is created only when:
+A SyncLRC candidate is created only when:
 
-- the returned `type` is `karaoke`,
+- a genuine Karaoke payload is present,
 - the payload parses as Enhanced LRC,
 - usable timed tokens are present,
 - the returned metadata passes the normal resolver checks.
+
+Responses that contain only synced/plain lyrics are ignored for this provider because direct LRCLIB already covers LINE_SYNC/plain.
 
 SyncLRC is queried only when Karaoke mode is enabled. It is an opportunistic third-party service; availability, upstream sources, rate behavior, and API behavior may change independently of Auto Lyrics.
 
