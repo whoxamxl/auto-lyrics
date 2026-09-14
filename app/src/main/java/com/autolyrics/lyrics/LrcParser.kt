@@ -52,6 +52,17 @@ object LrcParser {
 
         if (timestamps.isEmpty()) return emptyList()
 
+        // Some Enhanced-LRC producers insert formatting whitespace between the
+        // line timestamp and the first timed-token tag. That whitespace is not
+        // part of the sung lyric text, so remove it only when the prefix before
+        // the first word tag contains no visible characters.
+        val firstWordMatch = WORD_TIMESTAMP.find(remaining)
+        if (firstWordMatch != null &&
+            remaining.substring(0, firstWordMatch.range.first).isBlank()
+        ) {
+            remaining = remaining.substring(firstWordMatch.range.first)
+        }
+
         val wordMatches = WORD_TIMESTAMP.findAll(remaining).toList()
         val fullText = WORD_TIMESTAMP.replace(remaining, "")
         val words = wordMatches.mapIndexedNotNull { index, match ->
