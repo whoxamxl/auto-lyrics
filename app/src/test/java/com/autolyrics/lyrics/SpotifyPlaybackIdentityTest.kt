@@ -5,6 +5,7 @@ import com.autolyrics.model.TrackInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpotifyPlaybackIdentityTest {
@@ -72,6 +73,26 @@ class SpotifyPlaybackIdentityTest {
         val params = MusixmatchClient.buildMacroParams(track)
 
         assertFalse(params.containsKey("track_spotify_id"))
+    }
+
+    @Test
+    fun musixmatchRejectsDifferentReturnedSpotifyId() {
+        assertFalse(
+            MusixmatchClient.spotifyIdentityCompatible(
+                requestedSpotifyTrackId = spotifyId,
+                matchedSpotifyTrackId = "6RQHFGBBKWNB9MLMUQDHG6"
+            )
+        )
+    }
+
+    @Test
+    fun musixmatchAllowsMissingReturnedSpotifyIdAndKeepsMetadataFallback() {
+        assertTrue(
+            MusixmatchClient.spotifyIdentityCompatible(
+                requestedSpotifyTrackId = spotifyId,
+                matchedSpotifyTrackId = ""
+            )
+        )
     }
 
     private fun track(
