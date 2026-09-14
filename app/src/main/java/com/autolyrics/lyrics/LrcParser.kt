@@ -5,8 +5,8 @@ import com.autolyrics.model.LyricWord
 
 object LrcParser {
 
-    private val LINE_TIMESTAMP = Regex("""\[(\d{2}):(\d{2})\.(\d{2,3})]""")
-    private val WORD_TIMESTAMP = Regex("""<(\d{2}):(\d{2})\.(\d{2,3})>""")
+    private val LINE_TIMESTAMP = Regex("""\[(\d{1,3}):(\d{2})[.:](\d{2,3})]""")
+    private val WORD_TIMESTAMP = Regex("""<(\d{1,3}):(\d{2})[.:](\d{2,3})>""")
 
     fun parse(lrc: String): List<LyricLine> {
         return lrc.lines()
@@ -52,8 +52,35 @@ object LrcParser {
 
         if (timestamps.isEmpty()) return emptyList()
 
-        val words = parseWords(remaining)
-        val fullText = words.joinToString(" ") { it.text }.trim()
+        // Some Enhanced-LRC producers insert formatting whitespace between the
+        // line timestamp and the first timed-token tag. That whitespace is not
+        // part of the sung lyric text, so remove it only when the prefix before
+        // the first word tag contains no visible characters.
+        val firstWordMatch = WORD_TIMESTAMP.find(remaining)
+        if (firstWordMatch != null &&
+            remaining.substring(0, firstWordMatch.range.first).isBlank()
+        ) {
+            remaining = remaining.substring(firstWordMatch.range.first)
+        }
+
+        val wordMatches = WORD_TIMESTAMP.findAll(remaining).toList()
+        val fullText = WORD_TIMESTAMP.replace(remaining, "")
+        val words = wordMatches.mapIndexedNotNull { index, match ->
+            val textStart = match.range.last + 1
+            val textEnd = wordMatches.getOrNull(index + 1)?.range?.first ?: remaining.length
+            if (textStart > textEnd) return@mapIndexedNotNull null
+
+            // Enhanced LRC often leaves the separating space attached to the
+            // preceding timed token. Preserve it exactly so the full source line
+            // can be reconstructed and display grouping can operate independently
+            // from provider token granularity.
+            val tokenText = remaining.substring(textStart, textEnd)
+            if (tokenText.isEmpty()) return@mapIndexedNotNull null
+            LyricWord(
+                timeMs = parseTimestamp(match),
+                text = tokenText
+            )
+        }
 
         return timestamps.map { ts ->
             if (words.isNotEmpty() && fullText.isNotBlank()) {
@@ -62,50 +89,6 @@ object LrcParser {
                 LyricLine(ts, fullText.ifBlank { "♪" })
             }
         }
-    }
-
-    private fun parseWords(text: String): List<LyricWord> {
-        val words = mutableListOf<LyricWord>()
-        var remaining = text
-
-        while (remaining.isNotEmpty()) {
-            val match = WORD_TIMESTAMP.find(remaining)
-            if (match == null) {
-                val leftover = remaining.trim()
-                if (leftover.isNotBlank() && words.isNotEmpty()) {
-                    val last = words.removeAt(words.lastIndex)
-                    words.add(LyricWord(last.timeMs, (last.text + " " + leftover).trim()))
-                }
-                break
-            }
-
-            val beforeTag = remaining.substring(0, match.range.first).trim()
-            if (beforeTag.isNotBlank() && words.isNotEmpty()) {
-                val last = words.removeAt(words.lastIndex)
-                words.add(LyricWord(last.timeMs, (last.text + " " + beforeTag).trim()))
-            }
-
-            val timeMs = parseTimestamp(match)
-            remaining = remaining.substring(match.range.last + 1)
-
-            val nextMatch = WORD_TIMESTAMP.find(remaining)
-            val wordText = if (nextMatch != null) {
-                remaining.substring(0, nextMatch.range.first).trim()
-            } else {
-                remaining.trim().also { remaining = "" }
-            }
-            if (nextMatch != null) {
-                remaining = remaining.substring(nextMatch.range.first)
-            }
-
-            if (wordText.isNotBlank()) {
-                words.add(LyricWord(timeMs, wordText))
-            } else {
-                words.add(LyricWord(timeMs, ""))
-            }
-        }
-
-        return words.filter { it.text.isNotBlank() }
     }
 
     private fun parseTimestamp(match: MatchResult): Long {
