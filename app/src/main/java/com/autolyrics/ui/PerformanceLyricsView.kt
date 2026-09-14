@@ -9,6 +9,7 @@ import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
+import android.view.accessibility.AccessibilityEvent
 import com.autolyrics.lyrics.KaraokeTiming
 import com.autolyrics.model.LyricLine
 import com.autolyrics.util.LyricWordLayout
@@ -32,6 +33,10 @@ class PerformanceLyricsView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
 
     var positionProvider: (() -> Long)? = null
 
@@ -58,6 +63,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
     private var targetLine = 0
     private var activeLine = -1
     private var lastLinesIdentity = 0
+    private var lastAccessibilityText: String? = null
 
     private var animIndex = 0f
     private var animVelocity = 0f
@@ -115,6 +121,11 @@ class PerformanceLyricsView @JvmOverloads constructor(
             animVelocity = 0f
         }
 
+        updateAccessibilityText(
+            if (plainMode) newLines.joinToString("\n") { it.text }
+            else newLines.getOrNull(activeLine)?.text
+        )
+
         if (contentChanged) requestRebuild() else resume()
     }
 
@@ -122,6 +133,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
         if (index < 0) {
             activeLine = -1
             targetLine = 0
+            updateAccessibilityText(null)
             if (abs(animIndex) > SNAP_JUMP_LINES) {
                 animIndex = 0f
                 animVelocity = 0f
@@ -132,6 +144,7 @@ class PerformanceLyricsView @JvmOverloads constructor(
         if (index !in lines.indices) return
         activeLine = index
         targetLine = index
+        updateAccessibilityText(lines[index].text)
         if (abs(index - animIndex) > SNAP_JUMP_LINES) {
             animIndex = index.toFloat()
             animVelocity = 0f
@@ -146,7 +159,18 @@ class PerformanceLyricsView @JvmOverloads constructor(
             lines = emptyList()
             layouts = emptyList()
         }
+        updateAccessibilityText(text)
         invalidate()
+    }
+
+    private fun updateAccessibilityText(text: String?) {
+        val normalized = text?.takeIf { it.isNotBlank() }
+        if (lastAccessibilityText == normalized) return
+        lastAccessibilityText = normalized
+        contentDescription = normalized
+        if (isAttachedToWindow && normalized != null) {
+            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)
+        }
     }
 
     private fun requestRebuild() {
@@ -299,7 +323,28 @@ class PerformanceLyricsView @JvmOverloads constructor(
         if (!settled) return true
         if (!isPlaying) return false
         if (plainMode) return trackDurationMs > 0L
-        return lines.getOrNull(activeLine)?.words?.isNotEmpty() == true
+        return hasActiveKaraokeAnimation()
+    }
+
+    private fun hasActiveKaraokeAnimation(): Boolean {
+        val line = lines.getOrNull(activeLine) ?: return false
+        val lineLayout = layouts.getOrNull(activeLine) ?: return false
+        val position = safePosition()
+        val activeToken = KaraokeTiming.activeWordIndex(line.words, position)
+        if (activeToken !in line.words.indices) return false
+
+        var groupLast = activeToken
+        while (groupLast + 1 < line.words.size &&
+            sameDisplayRange(lineLayout, groupLast + 1, activeToken)
+        ) {
+            groupLast++
+        }
+
+        val groupStartMs = line.words[activeToken].timeMs
+        val groupEndMs = line.words[groupLast].endTimeMs
+            ?: line.words.getOrNull(groupLast + 1)?.timeMs
+            ?: (groupStartMs + LAST_GROUP_MS)
+        return position < groupEndMs
     }
 
     private fun centerOf(index: Float): Float {
