@@ -18,9 +18,29 @@ class MediaListenerService : NotificationListenerService() {
             pickBestSession(controllers)
         }
 
+    private val lyricsDemandListener: (Boolean) -> Unit = { active ->
+        if (active) {
+            // Demand can become active without a media-session ordering change
+            // (opening the phone UI or connecting Android Auto), so immediately
+            // forward the currently selected/playing session.
+            updateSessions()
+        } else {
+            // Detach MediaTracker from the controller so later metadata changes do
+            // not trigger provider work while the app is unused. The notification
+            // listener itself keeps selecting sessions in the background.
+            MediaTracker.getInstance(this).onMediaSessionChanged(null)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         sessionManager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
+        LyricsDemandController.addListener(lyricsDemandListener)
+    }
+
+    override fun onDestroy() {
+        LyricsDemandController.removeListener(lyricsDemandListener)
+        super.onDestroy()
     }
 
     override fun onListenerConnected() {
@@ -60,7 +80,9 @@ class MediaListenerService : NotificationListenerService() {
         val filtered = controllers?.filter { it.packageName != packageName }
         if (filtered.isNullOrEmpty()) {
             selectedSessionToken = null
-            MediaTracker.getInstance(this).onMediaSessionChanged(null)
+            if (LyricsDemandController.isActive) {
+                MediaTracker.getInstance(this).onMediaSessionChanged(null)
+            }
             return
         }
 
@@ -74,6 +96,8 @@ class MediaListenerService : NotificationListenerService() {
         } ?: filtered.first()
 
         selectedSessionToken = best.sessionToken
-        MediaTracker.getInstance(this).onMediaSessionChanged(best)
+        if (LyricsDemandController.isActive) {
+            MediaTracker.getInstance(this).onMediaSessionChanged(best)
+        }
     }
 }

@@ -5,8 +5,10 @@ import android.app.Application
 import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
+import androidx.car.app.connection.CarConnection
 import com.autolyrics.auto.LyricsBrowserService
 import com.autolyrics.lyrics.LyricsTranslator
+import com.autolyrics.media.LyricsDemandController
 import com.autolyrics.media.MediaTracker
 
 class AutoLyricsApp : Application() {
@@ -14,10 +16,13 @@ class AutoLyricsApp : Application() {
         super.onCreate()
         LyricsTranslator.init(this)
         MediaTracker.init(this)
+
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
 
-            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityStarted(activity: Activity) {
+                LyricsDemandController.onPhoneActivityStarted()
+            }
 
             override fun onActivityResumed(activity: Activity) {
                 if (activity is AppCompatActivity) {
@@ -31,12 +36,25 @@ class AutoLyricsApp : Application() {
 
             override fun onActivityPaused(activity: Activity) = Unit
 
-            override fun onActivityStopped(activity: Activity) = Unit
+            override fun onActivityStopped(activity: Activity) {
+                LyricsDemandController.onPhoneActivityStopped()
+            }
 
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
             override fun onActivityDestroyed(activity: Activity) = Unit
         })
+
+        // Keep lyric resolution active for the whole Android Auto projection
+        // session, even while the user is viewing another AA app.
+        CarConnection(this).type.observeForever { connectionType ->
+            LyricsDemandController.setCarProjectionConnected(
+                connectionType == CarConnection.CONNECTION_TYPE_PROJECTION
+            )
+        }
+
+        // Preserve existing MediaBrowserService startup/discovery behavior. This
+        // change gates provider work only; it does not change AA auto-availability.
         try {
             startService(Intent(this, LyricsBrowserService::class.java))
         } catch (_: Exception) { }
