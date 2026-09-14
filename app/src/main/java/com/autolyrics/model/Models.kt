@@ -6,7 +6,10 @@ data class TrackInfo(
     val title: String,
     val artist: String,
     val album: String,
-    val durationMs: Long
+    val durationMs: Long,
+    val playbackSourcePackage: String = "",
+    val playbackSourceMediaId: String = "",
+    val playbackSourceMediaUri: String = ""
 )
 
 data class LyricWord(
