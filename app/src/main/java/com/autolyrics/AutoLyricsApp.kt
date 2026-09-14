@@ -21,7 +21,10 @@ class AutoLyricsApp : Application() {
 
             override fun onActivityResumed(activity: Activity) {
                 if (activity is AppCompatActivity) {
+                    // Install status first; inserting the target row afterwards pushes
+                    // status below it, yielding Toggle -> Language -> Status.
                     TranslationStatusView.install(activity)
+                    TranslationTargetView.install(activity)
                 }
             }
 
