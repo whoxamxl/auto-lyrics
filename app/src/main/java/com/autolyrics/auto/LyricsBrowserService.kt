@@ -79,9 +79,9 @@ class LyricsBrowserService : MediaBrowserServiceCompat() {
         // Em + en spacing approximates the rendered width of the current-line marker
         // so lyric text starts at the same x-position on surrounding rows.
         private const val IDLE_LINE_PREFIX = "\u2003\u2002"
-        // Browse subtitles use a smaller text size than titles, so they need slightly
-        // more em-based spacing to land on the same visual lyric-text start position.
-        private const val TRANSLATION_SUBTITLE_PREFIX = "\u2003\u2003"
+        // Browse subtitles render smaller than titles; em + en + thin spacing lands
+        // between the previous 1.5em (slightly short) and 2em (slightly too far).
+        private const val TRANSLATION_SUBTITLE_PREFIX = "\u2003\u2002\u2009"
         private const val PAD_WIDTH = 60
         private const val NOTIFY_THROTTLE_MS = 500L
         private const val BROWSE_KARAOKE_WINDOW_MS = 600L
