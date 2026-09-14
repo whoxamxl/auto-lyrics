@@ -15,39 +15,73 @@ This document describes the current implementation. Keep user-facing setup in `R
 | **Karaoke mode** | May prefer a near-equivalent candidate with real timing-token data. |
 | **AA offset** | Android-Auto-specific delay stored as `aa_offset_ms`. |
 | **Phone/global offset** | Main lyric offset managed by `lyrics_offset_ms`. |
+| **Lyrics demand** | Whether provider resolution should be active. Demand is true while a phone Activity is started or Android Auto projection is connected. |
 
 ## Architecture
 
 ```text
-AutoLyricsApp
-  └─ MediaTracker (singleton / StateFlow)
-       ├─ active MediaController state
-       ├─ LrcLibClient ─────────────┐
-       ├─ MusixmatchClient ─────────┤ parallel
-       ├─ PetitLyricsClient ────────┤ when configured
-       ├─ SyncLrcClient ────────────┤ Karaoke mode only
-       ├─ LyricsProviderResolver ◀──┘
-       ├─ LyricsCache (STANDARD / KARAOKE variants)
-       ├─ MetadataCleaner
-       ├─ LrcParser
-       ├─ KaraokeTiming
-       ├─ LyricsTranslator
-       └─ AlbumColorExtractor
-
-Phone
-  ├─ MainActivity
-  └─ PerformanceActivity
-       └─ LyricWordLayout
-
-Android Auto
-  └─ LyricsBrowserService
-       ├─ Lyrics / Sync / More browse sections
-       ├─ MediaSession / now-playing metadata
-       ├─ transport-control proxy
-       └─ LyricWordLayout
+Phone Activity lifecycle ────────────────┐
+Android Auto CarConnection(PROJECTION) ──┤
+                                          ▼
+                                LyricsDemandController
+                                          │
+                                          │ active demand
+                                          ▼
+MediaListenerService (NotificationListenerService)
+    │
+    ├── continuously observes/selects active media sessions
+    └── forwards the selected session only while demand is active
+                                          │
+                                          ▼
+                               MediaTracker (singleton / StateFlow)
+                                  ├─ active MediaController state
+                                  ├─ LrcLibClient ─────────────┐
+                                  ├─ MusixmatchClient ─────────┤ parallel
+                                  ├─ PetitLyricsClient ────────┤ when configured
+                                  ├─ SyncLrcClient ────────────┤ Karaoke mode only
+                                  ├─ LyricsProviderResolver ◀──┘
+                                  ├─ LyricsCache (STANDARD / KARAOKE variants)
+                                  ├─ MetadataCleaner
+                                  ├─ LrcParser
+                                  ├─ KaraokeTiming
+                                  ├─ LyricsTranslator
+                                  └─ AlbumColorExtractor
+                                          │
+                     ┌────────────────────┴────────────────────┐
+                     ▼                                         ▼
+                  Phone UI                           LyricsBrowserService
+            MainActivity / PerformanceActivity       Android Auto MediaBrowser
+                     │                                + MediaSession
+                     └─ LyricWordLayout                        └─ LyricWordLayout
 ```
 
-`MediaListenerService` is a `NotificationListenerService`; its access allows inspection of active media sessions. The selected playing session remains sticky while active so controller ordering changes do not steal selection.
+`MediaListenerService` is a `NotificationListenerService`; notification access allows inspection of active media sessions. The selected playing session remains sticky while it is still playing so controller ordering changes do not steal selection.
+
+## Demand gating
+
+Provider resolution is intentionally not active all the time.
+
+`LyricsDemandController` maintains two process-wide inputs:
+
+- phone demand: at least one Auto Lyrics Activity is in the Android **started** lifecycle state,
+- car demand: `CarConnection.CONNECTION_TYPE_PROJECTION` indicates an Android Auto projection session.
+
+The effective state is:
+
+```text
+lyricsDemand = phoneActivityStarted || androidAutoProjectionConnected
+```
+
+Important behavior:
+
+- The notification listener continues lightweight media-session discovery even when demand is false.
+- When demand becomes true, `MediaListenerService` immediately re-reads active sessions and forwards the current best session to `MediaTracker`.
+- When demand becomes false, `MediaTracker` is detached from the controller so later metadata changes do not start new provider work.
+- An already-issued provider HTTP request is not forcibly cancelled by this gate; the change prevents subsequent track/session updates from starting more work.
+- Android Auto demand remains active for the entire projection session, even while another Android Auto app is in the foreground.
+- Existing `LyricsBrowserService` startup/discovery behavior is preserved; demand gating only controls lyric-resolution work.
+
+This separation allows the app to know the current media session quickly when the phone UI is opened or Android Auto connects without continuously querying lyric providers while the app is otherwise unused.
 
 ## Track position and offsets
 
@@ -60,6 +94,8 @@ Track changes are debounced by 600 ms. During playback, position is reconstructe
 Do **not** add a provider-wide pre-offset merely because lyrics appear early on one playback path. Media-session logical position can lead audible output because of Bluetooth, codec, Android Auto, DAC, or head-unit buffering. Stable output-path latency belongs in the existing offset controls unless a provider timestamp bias is demonstrated across multiple playback paths.
 
 ## Provider execution
+
+Provider work starts only while lyrics demand is active.
 
 Standard mode runs:
 
@@ -343,6 +379,8 @@ Lyrics | Sync | More
 
 Lyrics is first/default. The main browse window shows 5 rows without translations and 3 with translations. Sync is a fixed 3-row timing preview with ±50 ms AA offset controls. More shows provider and metadata details.
 
+Android Auto projection activates `LyricsDemandController` for the entire projection session. Provider resolution therefore remains available even if the user navigates from Auto Lyrics to another Android Auto app; it stops only after projection disconnects unless the phone UI is still active.
+
 Future-word look-ahead has been removed. The browse tree remains throttled (`NOTIFY_THROTTLE_MS = 500 ms`), so AA visual transitions can be coarser or slightly late compared with phone/Performance; they are no longer intentionally advanced. The now-playing subtitle is checked every 200 ms.
 
 Other relevant constants:
@@ -359,9 +397,19 @@ Other relevant constants:
 
 ## GitHub Actions
 
-`.github/workflows/build.yml` runs on pull requests to `main`, pushes to `main`, and `v*` tags.
+`.github/workflows/build.yml` runs on pull requests to `main`, pushes to `main`, `v*` tags, and manual `workflow_dispatch`.
 
-PR/main CI runs unit tests, lint, and debug APK assembly on Linux, plus unit tests, debug assembly, and lint using `gradlew.bat` on Windows.
+Linux `build` job behavior:
+
+- pull request / ordinary main push: unit tests, lint, debug APK assembly,
+- release trigger: unit tests, lint, release APK assembly, artifact upload, GitHub Release creation.
+
+A release trigger is either:
+
+- a `v*` tag push, or
+- a `main` commit whose message starts with `Release v`.
+
+The Windows regression job runs only for `pull_request` and `workflow_dispatch`. It runs `gradlew.bat` unit tests, debug assembly, and lint. It is intentionally skipped on ordinary main pushes and release pushes.
 
 Release workflow details are in `RELEASE.md`.
 
@@ -377,6 +425,7 @@ Run before merging provider/resolver changes:
 
 Automated coverage should retain:
 
+- lyrics-demand phone Activity counting and Android Auto projection behavior,
 - cross-script artist corroboration and same-title mismatch rejection,
 - multi-contributor artist matching,
 - Japanese/Latin interleaved payload quality penalty,
@@ -394,22 +443,28 @@ Automated coverage should retain:
 - Japanese character timing → word-like display grouping without mutating raw timing,
 - synchronized candidate preference over plain lyrics.
 
-Manual DHU checks:
+Manual Phone / DHU checks:
 
-1. Lyrics / Sync / More remain ordered correctly.
-2. Window sizes and translation layout remain correct.
-3. `▶` gutter alignment remains stable.
-4. Sync stays at 3 rows and ±50 ms changes AA offset.
-5. More displays provider/details without changing timing.
-6. Plain lyrics still advance.
-7. Karaoke source text retains correct spacing for English, Japanese, and mixed scripts.
-8. No future timing token is highlighted solely to hide browse latency.
-9. Karaoke ON can select an equivalent word-timed provider while Karaoke OFF independently retains the standard winner.
+1. With Android Auto disconnected and Auto Lyrics closed, changing tracks in another media app does not start new provider resolution.
+2. Opening Auto Lyrics on the phone immediately resolves the currently selected session.
+3. Connecting Android Auto activates provider resolution without requiring the phone UI to remain open.
+4. Lyrics / Sync / More remain ordered correctly.
+5. Window sizes and translation layout remain correct.
+6. `▶` gutter alignment remains stable.
+7. Sync stays at 3 rows and ±50 ms changes AA offset.
+8. More displays provider/details without changing timing.
+9. Plain lyrics still advance.
+10. Karaoke source text retains correct spacing for English, Japanese, and mixed scripts.
+11. No future timing token is highlighted solely to hide browse latency.
+12. Karaoke ON can select an equivalent word-timed provider while Karaoke OFF independently retains the standard winner.
 
 ## Key files
 
 | File | Purpose |
 |---|---|
+| `app/src/main/java/com/autolyrics/AutoLyricsApp.kt` | Process initialization, phone Activity demand tracking, Android Auto `CarConnection` tracking. |
+| `app/src/main/java/com/autolyrics/media/LyricsDemandController.kt` | Process-wide phone/Android-Auto demand state. |
+| `app/src/main/java/com/autolyrics/media/MediaListenerService.kt` | Media-session discovery/selection and demand-gated forwarding to `MediaTracker`. |
 | `app/src/main/java/com/autolyrics/media/MediaTracker.kt` | Media tracking, provider concurrency, resolver orchestration, cache refresh. |
 | `app/src/main/java/com/autolyrics/lyrics/LrcLibClient.kt` | LRCLIB lookup and local matching. |
 | `app/src/main/java/com/autolyrics/lyrics/MusixmatchClient.kt` | Musixmatch mobile token/macro/RichSync/subtitle flow. |
@@ -422,4 +477,4 @@ Manual DHU checks:
 | `app/src/main/java/com/autolyrics/util/LyricWordLayout.kt` | Exact source layout and timing-token → display-range grouping. |
 | `app/src/main/java/com/autolyrics/auto/LyricsBrowserService.kt` | Android Auto MediaBrowser, MediaSession, Sync controls, Karaoke rendering. |
 | `.github/workflows/build.yml` | CI and release build. |
-| `RELEASE.md` | Release checklist and version/tag invariants. |
+| `RELEASE.md` | Release checklist, version/tag invariants, and release triggers. |
