@@ -208,6 +208,7 @@ adb logcat -s Musixmatch:D ProviderResolver:D PetitLyrics:D
 - **Current renderer limitation:** Musixmatch RichSync lines without whitespace (common in Japanese) keep their exact line text/timing but suppress `LyricWord` chunks to avoid the UI inserting artificial spaces. Those lines therefore behave as LINE_SYNC until the renderer becomes chunk-spacing-aware.
 - Media-session metadata quality varies by player. Auto Lyrics includes heuristics for common metadata problems, but unusual formats can still miss or mismatch.
 - Audio-output latency can differ between the phone speaker, Bluetooth, and Android Auto. Use the existing phone/global or AA-specific offset controls when an output path has a stable device-specific delay; Auto Lyrics does not apply a fixed provider-wide compensation without evidence that the timing source itself is systematically biased.
+- Android Auto karaoke text currently uses a small future-word look-ahead to bridge browse refresh intervals. This can make AA word highlighting appear slightly early even when provider timestamps are correct; it does not affect phone/Performance word selection.
 - PetitLyrics client identifiers embedded in a distributed Android APK are extractable by design; do not use values that rely on client-side secrecy.
 - Sideloaded Android Auto media apps generally require Android Auto developer settings to be enabled.
 
