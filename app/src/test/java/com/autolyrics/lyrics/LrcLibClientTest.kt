@@ -118,6 +118,26 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun albumEvidenceDoesNotEraseExplicitTitleVersionConflict() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live)",
+                candidateTitle = "Song (Remastered)",
+                requestedAlbum = "Album (Live Remastered Edition)",
+                candidateAlbum = "Album (Live Remastered Edition)"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live)",
+                candidateTitle = "Song (Live Remastered)",
+                requestedAlbum = "Album (Remastered Edition)",
+                candidateAlbum = "Album (Remastered Edition)"
+            )
+        )
+    }
+
+    @Test
     fun explicitVersionSegmentBeforeOrdinaryTrailingSubtitleIsNotEvidence() {
         assertFalse(
             LrcLibClient.versionsCompatible(
