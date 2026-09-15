@@ -2,7 +2,7 @@ package com.autolyrics.lyrics
 
 private val BRACKETED_ALBUM_VERSION_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
 private val SUFFIX_ALBUM_VERSION_CONTEXT = Regex(
-    """(?:^|\s[-–—:]\s)(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo|ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)\b.*$""",
+    """\s[-–—:]\s(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo|ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)\b.*$""",
     RegexOption.IGNORE_CASE
 )
 private val WHOLE_ALBUM_VERSION_CONTEXT = Regex(
