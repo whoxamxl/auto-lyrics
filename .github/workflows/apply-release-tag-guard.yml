@@ -22,75 +22,58 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one match, found {count}")
-              p.write_text(text.replace(old, new, 1))
+          build = Path(".github/workflows/build.yml")
+          text = build.read_text()
+          start_marker = "      - name: Validate release version\n"
+          end_marker = "      - name: Validate PetitLyrics release configuration\n"
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          block = text[start:end]
+          if "git ls-remote --exit-code --tags" in block:
+              raise SystemExit("release tag reuse guard already present")
+          outer_fi = "          fi\n"
+          head, sep, tail = block.rpartition(outer_fi)
+          if not sep or tail.strip():
+              raise SystemExit("could not locate outer release-version fi")
+          block = head + '''          elif git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $EXPECTED_TAG" >&2
+            echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
+            exit 1
+          fi
 
-          replace_once(
-              ".github/workflows/build.yml",
-              '''      - name: Validate release version
-                  if: env.IS_RELEASE == 'true'
-                  shell: bash
-                  run: |
-                    EXPECTED_TAG="v${{ steps.version.outputs.name }}"
-                    if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-                      ACTUAL_TAG="${GITHUB_REF#refs/tags/}"
-                      if [[ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]]; then
-                        echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
-                        exit 1
-                      fi
-                    fi
-          ''',
-              '''      - name: Validate release version
-                  if: env.IS_RELEASE == 'true'
-                  shell: bash
-                  run: |
-                    EXPECTED_TAG="v${{ steps.version.outputs.name }}"
-                    if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-                      ACTUAL_TAG="${GITHUB_REF#refs/tags/}"
-                      if [[ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]]; then
-                        echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
-                        exit 1
-                      fi
-                    elif git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1; then
-                      echo "Release tag already exists: $EXPECTED_TAG" >&2
-                      echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
-                      exit 1
-                    fi
-          '''
-          )
+'''
+          build.write_text(text[:start] + block + text[end:])
 
-          replace_once(
-              "RELEASE.md",
-              '''Do not create the tag manually when using this path.
-          
-          ### 4. Verify CI
-          ''',
-              '''Do not create the tag manually when using this path.
-          
-          Before pushing, verify that `vX.Y.Z` is unused:
-          
-          ```powershell
-          git ls-remote --tags origin refs/tags/vX.Y.Z
-          ```
-          
-          This command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if the derived tag already exists.
-          
-          ### 4. Verify CI
-          '''
-          )
+          release = Path("RELEASE.md")
+          release_text = release.read_text()
+          old = '''Do not create the tag manually when using this path.
 
-          replace_once(
-              "RELEASE.md",
-              '''2. validate release version/tag consistency,
-          ''',
-              '''2. validate release version/tag consistency and reject tag reuse,
-          '''
+### 4. Verify CI
+'''
+          new = '''Do not create the tag manually when using this path.
+
+Before pushing, verify that `vX.Y.Z` is unused:
+
+```powershell
+git ls-remote --tags origin refs/tags/vX.Y.Z
+```
+
+This command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if the derived tag already exists.
+
+### 4. Verify CI
+'''
+          if release_text.count(old) != 1:
+              raise SystemExit("RELEASE.md: expected one atomic-release note")
+          release_text = release_text.replace(old, new, 1)
+          old_step = "2. validate release version/tag consistency,\n"
+          if release_text.count(old_step) != 1:
+              raise SystemExit("RELEASE.md: expected one release validation step")
+          release_text = release_text.replace(
+              old_step,
+              "2. validate release version/tag consistency and reject tag reuse,\n",
+              1
           )
+          release.write_text(release_text)
 
           Path(".github/workflows/apply-release-tag-guard.yml").unlink()
           PY
