@@ -1,116 +1,103 @@
-# Auto Lyrics
+# OpenAutoLyrics
 
-Auto Lyrics is an Android app that follows the active media session and displays lyrics on both the phone and Android Auto. It resolves lyrics from **LRCLIB**, **Musixmatch**, optional **PetitLyrics**, and — when Karaoke mode is enabled — **SyncLRC** for additional Enhanced-LRC word timing.
+**Synchronized lyrics for Android Auto and phone, with multi-provider matching, word-synced karaoke, translations, and timing controls.**
 
-## Features
+OpenAutoLyrics follows the active Android media session and resolves lyrics from multiple providers instead of accepting the first response. It is designed for sideloaded Android Auto use as well as a phone companion/performance view.
 
-- **Android Auto lyrics** — current line is marked with `▶` and surrounded by nearby lines.
-- **Lyrics / Sync / More browse tabs** — lyrics are the primary view, timing adjustment is kept separate, and detailed track/provider information lives under More.
-- **Adaptive lyric window** — the main Lyrics tab shows 5 rows without translations and 3 rows when translated subtitles are present.
-- **Fixed 3-row Sync preview** — current line plus surrounding context while adjusting the Android Auto offset.
-- **Now-playing lyric line** — the Android Auto now-playing card also carries the current lyric line.
-- **Multi-provider resolution** — LRCLIB, Musixmatch, configured PetitLyrics, and Karaoke-only SyncLRC candidates are compared using metadata match, lyric quality, and source confidence.
-- **Karaoke-aware selection** — normal mode remains accuracy-first; Karaoke mode may prefer a real WORD_SYNC candidate when its recording match and payload quality are near-equivalent to the normal winner.
-- **Musixmatch RichSync** — when available, Musixmatch word-level timing is exposed as karaoke/word sync; line-synchronized subtitles are used as fallback.
-- **SyncLRC Enhanced LRC** — Karaoke mode can query SyncLRC for additional fine-grained timing sourced through its LRCLIB/LDDC/syncedlyrics stack. Synced/plain-only responses are intentionally ignored.
-- **Timing-token / display-word separation** — providers may timestamp a whole word, syllable, fragment, or individual character. Raw timestamps are retained, while the renderer groups fine tokens into human-readable display words/phrases.
-- **Script-aware rendering** — English, Japanese, and mixed-script lines preserve the provider's original text and spacing without synthetic spaces.
-- **Synced and plain fallback** — synchronized lyrics are preferred; LRCLIB plain text remains a last-resort fallback.
-- **Robust metadata matching** — handles recording/version qualifiers, romanized-vs-native-script artist names, and multi-contributor metadata such as `Alan Menken, Howard Ashman, Samuel E. Wright, Disney`.
-- **Works with normal media-session players** — Spotify, YouTube Music, Apple Music, Poweramp, and other apps that expose usable Android media metadata.
-- **Demand-aware provider work** — active media sessions are monitored continuously, but lyric providers are queried only while the phone UI is in use or Android Auto projection is connected.
-- **Phone companion UI** — lyrics remain available on the phone, including the performance/karaoke view.
-- **Local cache** — normal and Karaoke selections use separate cache variants; word timestamps and explicit word end times are preserved.
+## Highlights
 
-## Architecture
+- **Android Auto lyrics** with a moving lyric window and now-playing lyric line
+- **Multi-provider resolution** across LRCLIB, Musixmatch, optional PetitLyrics, and Karaoke-only SyncLRC
+- **Candidate scoring** based on recording metadata, lyric quality, synchronization quality, and provider confidence
+- **Word-synced Karaoke** using Musixmatch RichSync and Enhanced-LRC timing when available
+- **Translation support** with on-device language detection and translation
+- **Timing controls** for global/phone playback and a separate Android Auto offset
+- **Robust metadata matching** for versions, remasters, native/romanized artist names, and multi-artist metadata
+- **Local caching** with separate normal/Karaoke variants
+- **Demand-aware provider work** so lyric lookups run only while the phone UI or Android Auto projection needs them
+- **Unit/regression coverage** for provider parsing, matching, timing, and layout behavior
+
+## How it works
 
 ```text
 Phone Activity lifecycle ───────┐
 Android Auto CarConnection ─────┤
                                 ▼
                       LyricsDemandController
-                                │ active demand
+                                │
                                 ▼
-MediaListenerService (NotificationListenerService)
-    │ selects active media sessions continuously
-    │ forwards the selected session only while demand is active
-    ▼
-MediaTracker (singleton / StateFlow)
-    │
-    ├── track + playback state
-    ├── LRCLIB ────────────────┐
-    ├── Musixmatch ────────────┤ parallel
-    ├── PetitLyrics ───────────┤ when configured
-    ├── SyncLRC ───────────────┤ Karaoke mode only
-    ├── LyricsProviderResolver ◀┘
-    ├── LyricsCache
-    └── translation / album-art helpers
-            │
-            ├──────────────────────────┐
-            ▼                          ▼
-      Phone UI                 LyricsBrowserService
-                               (Android Auto MediaBrowser + MediaSession)
+MediaListenerService → MediaTracker
+                         │
+                         ├── LRCLIB ─────────┐
+                         ├── Musixmatch ─────┤
+                         ├── PetitLyrics ────┤→ LyricsProviderResolver
+                         └── SyncLRC ────────┘   (Karaoke mode)
+                                │
+                         LyricsCache / translation
+                                │
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+                Phone UI            Android Auto UI
 ```
 
-Provider demand is active while at least one Auto Lyrics phone Activity is started **or** while Android Auto projection is connected. Android Auto keeps lyric resolution active for the full projection session even when another AA app is in the foreground. When neither condition is true, `MediaListenerService` may keep selecting the current media session, but it does not forward session changes to `MediaTracker`, so new provider lookups do not start.
+The resolver compares plausible candidates using one common scoring model. A richer timing format does not automatically beat a materially better recording match. Karaoke mode can prefer real word/timing-token data only when the candidate remains close enough in recording and payload quality.
 
-The provider resolver validates plausible candidates with one common scoring model. Synchronized candidates outrank plain lyrics. Timing granularity alone does not override a materially stronger recording match, but Karaoke mode can choose a near-equivalent candidate that contains real word/timing-token data.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the resolver, cache policy, provider formats, Android Auto behavior, and implementation notes.
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for scoring, cache policy, provider formats, and implementation details.
+## Providers
+
+| Provider | Normal mode | Karaoke / word timing | Notes |
+| --- | --- | --- | --- |
+| LRCLIB | Yes | No | Primary synchronized/plain source |
+| Musixmatch | Yes | Yes | RichSync when available; uses an unofficial/internal API surface |
+| PetitLyrics | Optional | Provider-dependent | Requires locally configured client values |
+| SyncLRC | No | Yes | Queried only in Karaoke mode for genuine Enhanced-LRC timing |
+
+Provider availability and unofficial/internal API behavior can change independently of OpenAutoLyrics.
 
 ## Requirements
 
 - Android 8.0 / API 26 or newer
-- Android Studio with Android SDK 34
+- Android Studio / Android SDK 34 for source builds
 - JDK 17
-- Notification access for Auto Lyrics so it can inspect active media sessions
-- Android Auto developer mode / unknown sources when using a sideloaded build
+- Notification access so OpenAutoLyrics can inspect active media sessions
+- Android Auto developer mode / **Unknown sources** for sideloaded builds
 
-## Install a Release
+## Install
 
-Prebuilt APKs are published under [GitHub Releases](https://github.com/whoxamxl/auto-lyrics/releases/latest).
+Prebuilt APKs are published under [GitHub Releases](https://github.com/whoxamxl/OpenAutoLyrics/releases/latest).
 
-Because Auto Lyrics is sideloaded, Android Auto normally needs developer mode enabled before the app is shown:
+For sideloaded Android Auto use:
 
-1. Open Android Auto settings on the phone.
-2. Enable Android Auto developer mode.
-3. Open **Developer settings**.
-4. Enable **Unknown sources**.
-5. Reconnect Android Auto if Auto Lyrics does not appear immediately.
-6. Open Auto Lyrics on the phone and grant notification access.
+1. Enable Android Auto developer mode.
+2. Open **Developer settings**.
+3. Enable **Unknown sources**.
+4. Install and open OpenAutoLyrics on the phone.
+5. Grant notification access.
+6. Reconnect Android Auto if the app does not appear immediately.
 
-## Build from Source
-
-### Basic build
+## Build from source
 
 ```powershell
 .\gradlew.bat testDebugUnitTest
 .\gradlew.bat assembleDebug
 ```
 
-The debug APK is generated at:
+Debug APK:
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Install it with ADB:
+Install with ADB:
 
 ```powershell
 adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-### PetitLyrics configuration
+### Optional PetitLyrics configuration
 
-LRCLIB, Musixmatch, and SyncLRC do not require local credentials. PetitLyrics is optional in local builds and requires your own registered client values.
-
-Copy the template:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Then fill in:
+Copy `.env.example` to `.env` and provide your own registered values:
 
 ```dotenv
 PETITLYRICS_USER_ID=
@@ -119,166 +106,29 @@ PETITLYRICS_PKG_NAME=
 PETITLYRICS_CLIENT_APP_ID=
 ```
 
-`.env` is ignored by Git. Do not commit private client values. The values are compiled into `BuildConfig`, so they should also **not be treated as cryptographically secret once an APK is distributed**.
-
-Configuration precedence is:
-
-```text
-process environment
-    ↓
-.env
-    ↓ only when .env does not exist
-.env.example
-```
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for provider details and [RELEASE.md](RELEASE.md) for the release workflow.
+`.env` is ignored by Git. These values are compiled into the APK and therefore must not be treated as cryptographically secret after distribution.
 
 ## Android Auto UI
 
-### Lyrics
+The browse UI is organized into three areas:
 
-The primary browse tab. It shows the track header plus a moving lyric window:
+- **Lyrics** — primary synchronized lyric view
+- **Sync** — Android-Auto-specific timing correction with `−50 ms` / `+50 ms` controls
+- **More** — track, provider, synchronization, language, duration, and offset information
 
-```text
-   previous line
-   previous line
-▶  current line
-   next line
-   next line
-```
+The phone UI also provides a performance/Karaoke view for finer-grained highlighting.
 
-The non-current rows reserve a visual gutter so their lyric text aligns with the current row. When translations are present, the main window is reduced to 3 rows to avoid overcrowding.
+## Release and development documentation
 
-### Sync
+- [DEVELOPMENT.md](DEVELOPMENT.md) — architecture, resolver, providers, timing, cache behavior, and regression notes
+- [RELEASE.md](RELEASE.md) — signing, CI release workflow, versioning, and release verification
 
-The secondary tab for Android Auto timing correction. It keeps a fixed 3-row lyric preview and provides `−50 ms` / `+50 ms` controls. This offset is Android-Auto-specific and is separate from the phone/global lyric offset.
+## Project history
 
-### More
+OpenAutoLyrics is an independently maintained project originally derived from [GitUpGitUp/auto-lyrics](https://github.com/GitUpGitUp/auto-lyrics). The original Git history and author attribution are preserved.
 
-Shows detailed information such as title, artist, album, provider, synchronization state, detected language, duration, and Android Auto offset.
-
-## How Lyrics Are Resolved
-
-1. `MediaListenerService` continuously selects the best active media session, but forwards it for lyric work only while the phone UI is active or Android Auto projection is connected.
-2. The selected media session provides title, artist, album, duration, playback state, and position.
-3. Metadata is cleaned before lookup.
-4. LRCLIB and Musixmatch are launched in parallel; configured PetitLyrics joins them. When Karaoke mode is enabled, SyncLRC is launched in the same comparison as an additional word-timing source.
-5. Provider-specific lookup logic gathers plausible candidates. Musixmatch locally validates the matcher result from its mobile macro response. SyncLRC is accepted only when the response contains a genuine Enhanced-LRC `karaoke` payload.
-6. `LyricsProviderResolver` validates metadata and compares candidate quality/source confidence.
-7. In normal mode, the highest-quality synchronized recording match wins. In Karaoke mode, a real WORD_SYNC candidate can replace that winner only when metadata and payload quality remain near-equivalent.
-8. The selected result is cached in a mode-specific cache variant. Karaoke falls back to a shorter refresh interval when no usable word timing was found, so a transient provider miss does not pin LINE_SYNC for a week.
-
-This design is intentionally not “first provider to respond wins”; normal request latency is not part of the score. A provider only loses due to speed when it exceeds its timeout budget and therefore fails to produce a candidate for that comparison.
-
-### WORD_SYNC means timed tokens, not guaranteed linguistic words
-
-Providers do not all expose the same granularity. A timed element may be a linguistic word, a syllable, a fragment, or — especially with Japanese karaoke data — one character.
-
-Auto Lyrics therefore keeps the source timing tokens intact and separates them from **display grouping**. For example:
-
-```text
-Provider timing tokens: Pro / vi / der
-Display highlight:       Provider
-
-Japanese timing tokens: 君 / を / 忘 / れ / な / い
-Display highlight:      君を / 忘れない   (word-like grouping)
-```
-
-This preserves precise timing while avoiding character-by-character or syllable-by-syllable visual jitter when the source is finer than the desired UI.
-
-### Why WORD_SYNC does not always beat LINE_SYNC
-
-`WORD_SYNC` describes timing granularity, not whether the provider matched the correct recording or whether the payload itself is reliable. A wrong live/remaster/edit with rich timing should not beat the correct recording merely because it has more timestamps.
-
-Normal mode therefore remains accuracy-first. Karaoke mode adds a constrained preference: a WORD_SYNC candidate must contain actual timing tokens and stay within the resolver's metadata/payload-quality tolerance of the normal winner.
-
-## Musixmatch provider
-
-Musixmatch uses the anonymous mobile API path rather than the desktop endpoint. Runtime testing found the desktop endpoint could return unrelated fixed tracks even with HTTP/API success, so Auto Lyrics does not rely on that path.
-
-Current flow:
-
-```text
-token.get
-    ↓
-macro.subtitles.get
-    ├── matcher.track.get      → matched metadata
-    ├── track.richsync.get     → word/timing-token data when available
-    └── track.subtitles.get    → line-synced LRC fallback
-```
-
-Important behavior:
-
-- the anonymous token is short-lived and cached briefly,
-- one token refresh/retry is allowed after an authentication rejection,
-- the macro's explicit `matcher.track.get` result is locally validated before lyrics are accepted,
-- RichSync is preferred when usable,
-- RichSync chunks retain their timestamps even when the source line has no spaces,
-- rendering aligns timing chunks to the original source text and groups fine fragments for display,
-- line-synchronized subtitles remain a synchronized fallback,
-- provider/network failure is isolated from the other providers.
-
-Musixmatch integration uses an unofficial/internal API surface and may change independently of Auto Lyrics.
-
-## SyncLRC provider
-
-Karaoke mode can query the public [SyncLRC](https://github.com/TharukRenuja/SyncLRC) API:
-
-```text
-GET https://api.synclrc.dev/lyrics
-    ?track=...
-    &artist=...
-    &type=karaoke
-    [&album=...]
-    [&duration=...]
-```
-
-The current public API returns canonical metadata plus separate `karaoke`, `synced`, and `plain` fields. Auto Lyrics uses only a non-empty `karaoke` payload. For compatibility with older SyncLRC deployments, the client can also read the former `type=karaoke` + `lyrics` response shape.
-
-SyncLRC documents Karaoke as Enhanced LRC and uses LRCLIB plus LDDC/syncedlyrics-backed sources such as NetEase, QQ Music, Kugou, and Musixmatch. Auto Lyrics does **not** embed or copy that upstream code; it consumes the public JSON API.
-
-A SyncLRC candidate is created only when:
-
-- a genuine Karaoke payload is present,
-- the payload parses as Enhanced LRC,
-- usable timed tokens are present,
-- the returned metadata passes the normal resolver checks.
-
-Responses that contain only synced/plain lyrics are ignored for this provider because direct LRCLIB already covers LINE_SYNC/plain.
-
-SyncLRC is queried only when Karaoke mode is enabled. It is an opportunistic third-party service; availability, upstream sources, rate behavior, and API behavior may change independently of Auto Lyrics.
-
-## Testing with Android Auto Desktop Head Unit (DHU)
-
-1. Install **Android Auto Desktop Head Unit emulator** from Android Studio → SDK Manager → SDK Tools.
-2. Enable Android Auto developer mode on the phone.
-3. Enable **Unknown sources** in Android Auto developer settings.
-4. Install the Auto Lyrics debug APK on the phone.
-5. Connect the phone to DHU using the Android Auto/DHU setup supported by your SDK version.
-6. Open **Lyrics** from the Auto Lyrics browse UI and verify line updates, Sync controls, and More metadata.
-
-Useful provider logs during development:
-
-```powershell
-adb logcat -s Musixmatch:D SyncLRC:D ProviderResolver:D PetitLyrics:D
-```
-
-## Known Constraints
-
-- Lyrics availability depends on upstream providers; not every recording has usable synchronized or Enhanced-LRC lyrics.
-- Musixmatch and PetitLyrics integrations use unofficial/internal API surfaces; SyncLRC is a third-party public aggregation service. Any of them can change independently of Auto Lyrics.
-- Media-session metadata quality varies by player. Auto Lyrics includes heuristics for common metadata problems, but unusual formats can still miss or mismatch.
-- Audio-output latency can differ between the phone speaker, Bluetooth, codecs, head units, and Android Auto. Use the existing phone/global or AA-specific offset controls when an output path has a stable delay. Auto Lyrics does **not** apply a fixed provider-wide pre-offset without evidence that a timing source itself is systematically biased across playback paths.
-- Android Auto browse-tree updates remain throttled, so visual Karaoke updates can be coarser than the phone/Performance UI even though future words are no longer intentionally highlighted early.
-- Fine source timing is display-grouped heuristically. Japanese segmentation in particular is intended to be more readable than character-by-character highlighting, not to be a full morphological analysis engine.
-- PetitLyrics client identifiers embedded in a distributed Android APK are extractable by design; do not use values that rely on client-side secrecy.
-- Sideloaded Android Auto media apps generally require Android Auto developer settings to be enabled.
-
-## Developer Documentation
-
-- [DEVELOPMENT.md](DEVELOPMENT.md) — architecture, provider resolver, cache behavior, provider formats, and Android Auto implementation notes.
-- [RELEASE.md](RELEASE.md) — versioning, release secrets, tagging, and post-release verification.
+The project has since expanded with a multi-provider resolver, additional providers, Karaoke/word timing, translation support, Android Auto UI changes, Spotify/media-session robustness, caching changes, and automated tests.
 
 ## License
 
-This repository currently does not contain a `LICENSE` file, and the upstream repository does not declare a GitHub-detected license. Do not infer redistribution terms from this README; licensing should be clarified explicitly before redistribution or publication beyond the repository's existing use.
+OpenAutoLyrics is released under the **MIT License**. See [LICENSE](LICENSE).
