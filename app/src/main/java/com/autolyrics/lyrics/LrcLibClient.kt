@@ -313,6 +313,12 @@ object LrcLibClient {
         )
         if (requestedTitleVersions == candidateTitleVersions) return true
 
+        // Album metadata may corroborate a version qualifier that is missing from
+        // one title, but it must never erase an explicit title-to-title conflict.
+        if (requestedTitleVersions.isNotEmpty() && candidateTitleVersions.isNotEmpty()) {
+            return false
+        }
+
         val requestedContext = requestedTitleVersions +
             extractAlbumVersionQualifiers(requestedAlbum)
         val candidateContext = candidateTitleVersions +
