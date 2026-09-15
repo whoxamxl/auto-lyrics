@@ -202,17 +202,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
                 .setIncludePad(false)
                 .build()
 
-            val displayStarts = IntArray(line.words.size)
-            val displayEnds = IntArray(line.words.size)
-            line.words.indices.forEach { tokenIndex ->
-                val displayRange = if (rendered.text == line.text) {
-                    LyricWordLayout.displayRangeForToken(line, tokenIndex)
-                } else {
-                    null
-                }
-                displayStarts[tokenIndex] = displayRange?.start ?: rendered.tokenStart[tokenIndex]
-                displayEnds[tokenIndex] = displayRange?.end ?: rendered.tokenEnd[tokenIndex]
-            }
+            val displayStarts = rendered.tokenStart
+            val displayEnds = rendered.tokenEnd
 
             val widestLine = (0 until layout.lineCount)
                 .maxOfOrNull { visualLine -> layout.getLineWidth(visualLine) }
@@ -243,20 +234,8 @@ class PerformanceLyricsView @JvmOverloads constructor(
             return RenderedText(line.text.ifBlank { "♪" }, IntArray(0), IntArray(0))
         }
 
-        val wordLayout = LyricWordLayout.layout(line)
-        val builder = StringBuilder()
-        val starts = IntArray(line.words.size)
-        val ends = IntArray(line.words.size)
-
-        line.words.forEachIndexed { index, word ->
-            builder.append(wordLayout.prefixes.getOrElse(index) { "" })
-            starts[index] = builder.length
-            builder.append(word.text)
-            ends[index] = builder.length
-        }
-        builder.append(wordLayout.suffix)
-
-        return RenderedText(builder.toString(), starts, ends)
+        val rendered = LyricWordLayout.renderedLine(line)
+        return RenderedText(rendered.text, rendered.tokenStart, rendered.tokenEnd)
     }
 
     private var running = false
