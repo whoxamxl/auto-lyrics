@@ -45,9 +45,11 @@ object MetadataCleaner {
     fun cleanAlbum(raw: String): String {
         var s = raw.trim()
         s = removeQualityTags(s)
-        // Edition noise should not dominate album matching, but recording-version
-        // markers can disambiguate a genuinely different lyric/timing source.
-        s = ALBUM_EDITION_GROUP.replace(s, ::preserveVersionMarkers)
+        // Edition noise should not dominate album matching. Preserve only version
+        // markers that the album-context parser independently recognizes as an
+        // explicit version/edition context; incidental words such as "Live" in an
+        // ordinary subtitle must not be synthesized into recording-version evidence.
+        s = ALBUM_EDITION_GROUP.replace(s, ::preserveExplicitAlbumVersionMarkers)
         return s.trim().ifBlank { raw.trim() }
     }
 
@@ -55,6 +57,21 @@ object MetadataCleaner {
         val markers = RECORDING_VERSION_PATTERN.findAll(match.value)
             .map { it.value.trim() }
             .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .toList()
+        return if (markers.isEmpty()) "" else " (${markers.joinToString(" ")})"
+    }
+
+    private fun preserveExplicitAlbumVersionMarkers(match: MatchResult): String {
+        val explicitQualifiers = extractAlbumVersionQualifiers(match.value)
+        if (explicitQualifiers.isEmpty()) return ""
+
+        val markers = RECORDING_VERSION_PATTERN.findAll(match.value)
+            .map { it.value.trim() }
+            .filter { marker ->
+                LrcLibClient.extractVersionQualifiers(marker)
+                    .any { qualifier -> qualifier in explicitQualifiers }
+            }
             .distinctBy { it.lowercase(Locale.ROOT) }
             .toList()
         return if (markers.isEmpty()) "" else " (${markers.joinToString(" ")})"
