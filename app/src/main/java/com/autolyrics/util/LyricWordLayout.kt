@@ -142,7 +142,8 @@ object LyricWordLayout {
     /**
      * Returns readable ranges for every timing token only when the timing payload
      * has enough evidence that it belongs to [LyricLine.text]. This prevents a
-     * single incidental word match from replacing the legacy compatibility path.
+     * small number of incidental substring matches from replacing the legacy
+     * compatibility path.
      */
     internal fun displayRangesForLine(line: LyricLine): List<DisplayRange>? {
         if (line.words.isEmpty()) return emptyList()
@@ -242,15 +243,25 @@ object LyricWordLayout {
         val sourceCanonical = canonicalContent(line.text)
         val timingCanonical = canonicalContent(line.words.joinToString(separator = "") { it.text })
         if (sourceCanonical.isNotEmpty() && sourceCanonical == timingCanonical) return true
+        if (sourceCanonical.isEmpty() || timingCanonical.isEmpty() || line.words.size == 1) return false
 
-        val alignedCount = tokenSpans.count { it != null }
-        if (line.words.size == 1) return false
-        if (alignedCount == line.words.size) return true
+        val alignedIndices = line.words.indices.filter { tokenSpans.getOrNull(it) != null }
+        if (alignedIndices.size < MIN_PARTIAL_ANCHORS) return false
 
-        // Partial matching is accepted only when multiple sequential anchors cover
-        // at least half the timing stream. One common word in an unrelated payload
-        // is deliberately insufficient evidence.
-        return alignedCount >= MIN_PARTIAL_ANCHORS && alignedCount * 2 >= line.words.size
+        // Count substantive canonical characters rather than token hits. This
+        // prevents unrelated fine-grained payloads such as [A, X, G, Z] from
+        // being accepted merely because one-letter substrings happen to occur in
+        // the source. Sequential matching guarantees these covered spans do not
+        // overlap or reorder.
+        val alignedCanonicalChars = alignedIndices.sumOf { index ->
+            canonicalContent(line.words[index].text).length
+        }
+        if (alignedCanonicalChars == 0) return false
+
+        return alignedCanonicalChars * MIN_COVERAGE_DENOMINATOR >=
+            sourceCanonical.length * MIN_COVERAGE_NUMERATOR &&
+            alignedCanonicalChars * MIN_COVERAGE_DENOMINATOR >=
+            timingCanonical.length * MIN_COVERAGE_NUMERATOR
     }
 
     private fun normalizeForAlignment(text: String): String =
@@ -371,4 +382,6 @@ object LyricWordLayout {
 
     private const val NORMALIZATION_SLACK_CHARS = 4
     private const val MIN_PARTIAL_ANCHORS = 2
+    private const val MIN_COVERAGE_NUMERATOR = 1
+    private const val MIN_COVERAGE_DENOMINATOR = 2
 }
