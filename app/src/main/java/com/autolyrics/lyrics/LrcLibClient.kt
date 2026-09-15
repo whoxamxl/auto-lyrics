@@ -303,13 +303,21 @@ object LrcLibClient {
         requestedAlbum: String = "",
         candidateAlbum: String = ""
     ): Boolean {
-        val requested = extractVersionQualifiers(requestedTitle, instrumental = false) +
-            extractVersionQualifiers(requestedAlbum, instrumental = false)
-        val candidate = extractVersionQualifiers(
+        val requestedTitleVersions = extractVersionQualifiers(
+            requestedTitle,
+            instrumental = false
+        )
+        val candidateTitleVersions = extractVersionQualifiers(
             candidateTitle,
             instrumental = candidateInstrumental
-        ) + extractVersionQualifiers(candidateAlbum, instrumental = false)
-        return requested == candidate
+        )
+        if (requestedTitleVersions == candidateTitleVersions) return true
+
+        val requestedContext = requestedTitleVersions +
+            extractVersionQualifiers(requestedAlbum, instrumental = false)
+        val candidateContext = candidateTitleVersions +
+            extractVersionQualifiers(candidateAlbum, instrumental = false)
+        return requestedContext.isNotEmpty() && requestedContext == candidateContext
     }
 
     internal fun extractVersionQualifiers(
