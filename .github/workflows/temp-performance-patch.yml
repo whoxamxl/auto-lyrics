@@ -1,0 +1,86 @@
+name: Temporary Performance renderer patch
+
+on:
+  push:
+    branches:
+      - fix/karaoke-display-range-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch PerformanceLyricsView
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/autolyrics/ui/PerformanceLyricsView.kt")
+          text = path.read_text()
+
+          old_ranges = '''            val displayStarts = IntArray(line.words.size)
+            val displayEnds = IntArray(line.words.size)
+            line.words.indices.forEach { tokenIndex ->
+                val displayRange = if (rendered.text == line.text) {
+                    LyricWordLayout.displayRangeForToken(line, tokenIndex)
+                } else {
+                    null
+                }
+                displayStarts[tokenIndex] = displayRange?.start ?: rendered.tokenStart[tokenIndex]
+                displayEnds[tokenIndex] = displayRange?.end ?: rendered.tokenEnd[tokenIndex]
+            }
+'''
+          new_ranges = '''            val displayStarts = rendered.tokenStart
+            val displayEnds = rendered.tokenEnd
+'''
+          if old_ranges not in text:
+              raise SystemExit("display-range block not found")
+          text = text.replace(old_ranges, new_ranges, 1)
+
+          old_rendered = '''    private fun renderedText(line: LyricLine): RenderedText {
+        if (line.words.isEmpty()) {
+            return RenderedText(line.text.ifBlank { "♪" }, IntArray(0), IntArray(0))
+        }
+
+        val wordLayout = LyricWordLayout.layout(line)
+        val builder = StringBuilder()
+        val starts = IntArray(line.words.size)
+        val ends = IntArray(line.words.size)
+
+        line.words.forEachIndexed { index, word ->
+            builder.append(wordLayout.prefixes.getOrElse(index) { "" })
+            starts[index] = builder.length
+            builder.append(word.text)
+            ends[index] = builder.length
+        }
+        builder.append(wordLayout.suffix)
+
+        return RenderedText(builder.toString(), starts, ends)
+    }
+'''
+          new_rendered = '''    private fun renderedText(line: LyricLine): RenderedText {
+        if (line.words.isEmpty()) {
+            return RenderedText(line.text.ifBlank { "♪" }, IntArray(0), IntArray(0))
+        }
+
+        val rendered = LyricWordLayout.renderedLine(line)
+        return RenderedText(rendered.text, rendered.tokenStart, rendered.tokenEnd)
+    }
+'''
+          if old_rendered not in text:
+              raise SystemExit("renderedText block not found")
+          text = text.replace(old_rendered, new_rendered, 1)
+          path.write_text(text)
+
+          Path(".github/workflows/temp-performance-patch.yml").unlink()
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Use shared karaoke display alignment in Fullscreen"
+          git push
