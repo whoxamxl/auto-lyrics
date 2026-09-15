@@ -37,6 +37,27 @@ fun buildConfigString(value: String): String {
     return "\"$escaped\""
 }
 
+// Release signing material must stay outside the repository. CI creates the
+// keystore in a temporary path and provides these values through environment
+// variables. Ordinary debug builds continue to use Android's standard debug
+// signing configuration.
+val releaseStoreFilePath = System.getenv("RELEASE_STORE_FILE")?.takeIf { it.isNotBlank() }
+val releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseSigningValues = listOf(
+    releaseStoreFilePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+)
+val releaseSigningConfigured = releaseSigningValues.all { it != null }
+
+check(releaseSigningValues.none { it != null } || releaseSigningConfigured) {
+    "Release signing configuration is incomplete. Set RELEASE_STORE_FILE, " +
+        "RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD together."
+}
+
 android {
     namespace = "com.autolyrics"
     compileSdk = 34
@@ -75,21 +96,25 @@ android {
     }
 
     signingConfigs {
-        getByName("debug") {
-            storeFile = file("signing.p12")
-            storePassword = "autolyrics"
-            keyAlias = "autolyrics"
-            keyPassword = "autolyrics"
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the standard Android debug keystore. Never use release keys here.
         }
         release {
             isMinifyEnabled = true
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
