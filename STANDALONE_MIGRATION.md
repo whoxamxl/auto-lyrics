@@ -37,7 +37,7 @@ OPENAUTOLYRICS_KEY_ALIAS
 OPENAUTOLYRICS_KEY_PASSWORD
 ```
 
-The existing PetitLyrics release secrets remain required as documented in `RELEASE.md`.
+The existing PetitLyrics release secret names remain required as documented in `RELEASE.md`, but the values should represent the standalone OpenAutoLyrics registration. In particular, use the appropriate package registration for `io.github.whoxamxl.openautolyrics` rather than assuming the old fork's `PETITLYRICS_PKG_NAME` remains valid.
 
 ## Detach from the fork network
 
