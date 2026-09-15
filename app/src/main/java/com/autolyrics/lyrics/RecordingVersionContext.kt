@@ -9,15 +9,8 @@ private const val JAPANESE_VERSION_MARKER =
     "(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?"
 
 private val BRACKETED_ALBUM_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
-private val SUFFIX_ALBUM_VERSION_CONTEXT = Regex(
-    """\s[-–—:]\s(?:(?:$ENGLISH_VERSION_MARKER)\b|$JAPANESE_VERSION_MARKER).*$""",
-    RegexOption.IGNORE_CASE
-)
-private val WHOLE_ALBUM_VERSION_CONTEXT = Regex(
-    """^\s*(?:(?:$ENGLISH_VERSION_MARKER)\b|$JAPANESE_VERSION_MARKER)\s*$""",
-    RegexOption.IGNORE_CASE
-)
-private val LIVE_LOCATION_ALBUM_CONTEXT = Regex(
+private val SEPARATOR_ALBUM_CONTEXT = Regex("""\s[-–—:]\s(.+)$""")
+private val LIVE_LOCATION_CONTEXT = Regex(
     """^\s*(?:live|ライブ)\s+(?:at|from|in)\b.*$""",
     RegexOption.IGNORE_CASE
 )
@@ -26,7 +19,7 @@ private val ENGLISH_VERSION_TOKEN = Regex(
     RegexOption.IGNORE_CASE
 )
 private val ENGLISH_CONTEXT_WORD = Regex("""[a-z]+|\d{4}""")
-private val JAPANESE_BRACKET_VERSION_CONTEXT = Regex(
+private val JAPANESE_VERSION_CONTEXT = Regex(
     """^\s*$JAPANESE_VERSION_MARKER\s*$"""
 )
 private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
@@ -50,28 +43,37 @@ private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
     "version",
     "ver",
     "radio",
-    "mix"
+    "mix",
+    "performance",
+    "session",
+    "concert"
 )
 
 /**
  * Extract recording-version evidence from album metadata only when the marker is
- * presented as an explicit edition/version context. This deliberately avoids
- * treating ordinary album names such as "Live Through This" or bracketed
- * subtitles such as "Album (We Live Here)" as proof that the currently playing
- * recording is a live version.
+ * presented as an explicit edition/version context. Bracketed labels, separator
+ * suffixes and whole-album labels all use the same classifier so ordinary names
+ * such as "Live Through This", "Album - Live Through This" and "We Live Here"
+ * cannot become recording-version evidence merely because they contain `Live`.
  */
 internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     if (value.isBlank()) return emptySet()
 
     val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
     val contexts = buildList {
-        BRACKETED_ALBUM_CONTEXT.findAll(normalized)
-            .map { it.value }
-            .filter(::isExplicitBracketVersionContext)
-            .forEach(::add)
-        SUFFIX_ALBUM_VERSION_CONTEXT.find(normalized)?.let { add(it.value) }
-        WHOLE_ALBUM_VERSION_CONTEXT.find(normalized)?.let { add(it.value) }
-        LIVE_LOCATION_ALBUM_CONTEXT.find(normalized)?.let { add(it.value) }
+        BRACKETED_ALBUM_CONTEXT.findAll(normalized).forEach { match ->
+            val inner = match.value.substring(1, match.value.length - 1).trim()
+            if (isExplicitVersionContext(inner)) add(inner)
+        }
+
+        SEPARATOR_ALBUM_CONTEXT.find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.takeIf(::isExplicitVersionContext)
+            ?.let(::add)
+
+        if (isExplicitVersionContext(normalized)) add(normalized)
     }
 
     return contexts
@@ -79,16 +81,15 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
         .toSet()
 }
 
-private fun isExplicitBracketVersionContext(bracketed: String): Boolean {
-    if (bracketed.length < 2) return false
-    val inner = bracketed.substring(1, bracketed.length - 1).trim()
-    if (inner.isBlank()) return false
+private fun isExplicitVersionContext(value: String): Boolean {
+    val text = value.trim()
+    if (text.isBlank()) return false
 
-    if (JAPANESE_BRACKET_VERSION_CONTEXT.matches(inner)) return true
-    if (LIVE_LOCATION_ALBUM_CONTEXT.matches(inner)) return true
-    if (!ENGLISH_VERSION_TOKEN.containsMatchIn(inner)) return false
+    if (JAPANESE_VERSION_CONTEXT.matches(text)) return true
+    if (LIVE_LOCATION_CONTEXT.matches(text)) return true
+    if (!ENGLISH_VERSION_TOKEN.containsMatchIn(text)) return false
 
-    val words = ENGLISH_CONTEXT_WORD.findAll(inner.lowercase(Locale.ROOT))
+    val words = ENGLISH_CONTEXT_WORD.findAll(text.lowercase(Locale.ROOT))
         .map { it.value }
         .toList()
     if (words.isEmpty()) return false
