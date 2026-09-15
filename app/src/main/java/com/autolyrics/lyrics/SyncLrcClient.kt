@@ -5,6 +5,7 @@ import com.autolyrics.BuildConfig
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.TrackInfo
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -41,17 +42,17 @@ object SyncLrcClient {
     )
 
     internal data class ApiResponse(
-        val karaoke: String? = null,
-        val synced: String? = null,
-        val plain: String? = null,
-        val lyrics: String? = null,
-        val type: String? = null,
-        val id: String? = null,
-        val track: String? = null,
-        val artist: String? = null,
-        val album: String? = null,
-        val duration: Double? = null,
-        val instrumental: Boolean = false
+        @SerializedName("karaoke") val karaoke: String? = null,
+        @SerializedName("synced") val synced: String? = null,
+        @SerializedName("plain") val plain: String? = null,
+        @SerializedName("lyrics") val lyrics: String? = null,
+        @SerializedName("type") val type: String? = null,
+        @SerializedName("id") val id: String? = null,
+        @SerializedName("track") val track: String? = null,
+        @SerializedName("artist") val artist: String? = null,
+        @SerializedName("album") val album: String? = null,
+        @SerializedName("duration") val duration: Double? = null,
+        @SerializedName("instrumental") val instrumental: Boolean = false
     )
 
     fun getKaraokeLyrics(track: TrackInfo): SyncLrcResult? {
