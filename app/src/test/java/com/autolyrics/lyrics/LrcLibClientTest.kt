@@ -69,6 +69,18 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun matchingTitleVersionsIgnoreExtraAlbumEditionMarker() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song",
+                requestedAlbum = "Album",
+                candidateAlbum = "Album (Remastered)"
+            )
+        )
+    }
+
+    @Test
     fun albumVersionEvidenceStillRejectsDifferentRecording() {
         assertFalse(
             LrcLibClient.versionsCompatible(
