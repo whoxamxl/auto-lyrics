@@ -241,7 +241,13 @@ object LrcLibClient {
         val candidateArtist = candidate.artistName.orEmpty()
         val candidateAlbum = candidate.albumName.orEmpty()
 
-        if (!versionsCompatible(trackName, candidateTitle, candidate.instrumental == true)) {
+        if (!versionsCompatible(
+            requestedTitle = trackName,
+            candidateTitle = candidateTitle,
+            candidateInstrumental = candidate.instrumental == true,
+            requestedAlbum = albumName,
+            candidateAlbum = candidateAlbum
+        )) {
             return null
         }
 
@@ -293,10 +299,16 @@ object LrcLibClient {
     internal fun versionsCompatible(
         requestedTitle: String,
         candidateTitle: String,
-        candidateInstrumental: Boolean = false
+        candidateInstrumental: Boolean = false,
+        requestedAlbum: String = "",
+        candidateAlbum: String = ""
     ): Boolean {
-        val requested = extractVersionQualifiers(requestedTitle, instrumental = false)
-        val candidate = extractVersionQualifiers(candidateTitle, instrumental = candidateInstrumental)
+        val requested = extractVersionQualifiers(requestedTitle, instrumental = false) +
+            extractVersionQualifiers(requestedAlbum, instrumental = false)
+        val candidate = extractVersionQualifiers(
+            candidateTitle,
+            instrumental = candidateInstrumental
+        ) + extractVersionQualifiers(candidateAlbum, instrumental = false)
         return requested == candidate
     }
 
