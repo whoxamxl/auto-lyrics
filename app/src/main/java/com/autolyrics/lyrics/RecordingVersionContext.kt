@@ -8,7 +8,7 @@ private const val ENGLISH_VERSION_MARKER =
 private const val JAPANESE_VERSION_MARKER =
     "(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?"
 
-private val BRACKETED_ALBUM_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
+private val BRACKETED_VERSION_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
 private val VERSION_SEPARATOR = Regex("""\s[-–—]\s|:\s*""")
 private val LIVE_LOCATION_CONTEXT = Regex(
     """^\s*(?:live|ライブ)\s+(?:at|from|in)\b.*$""",
@@ -61,7 +61,7 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
 
     val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
     val contexts = buildList {
-        BRACKETED_ALBUM_CONTEXT.findAll(normalized).forEach { match ->
+        BRACKETED_VERSION_CONTEXT.findAll(normalized).forEach { match ->
             val inner = match.value.substring(1, match.value.length - 1).trim()
             trailingExplicitVersionContext(inner)?.let(::add)
         }
@@ -72,6 +72,39 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     return contexts
         .flatMap { LrcLibClient.extractVersionQualifiers(it).toList() }
         .toSet()
+}
+
+/**
+ * Extract title version qualifiers only from explicit title-version syntax.
+ * Ordinary title words such as "Live" in "Live Forever" are not version evidence.
+ */
+internal fun extractTitleVersionQualifiers(
+    value: String,
+    instrumental: Boolean = false
+): Set<String> {
+    if (value.isBlank()) {
+        return if (instrumental) setOf("instrumental") else emptySet()
+    }
+
+    val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
+    val contexts = buildList {
+        BRACKETED_VERSION_CONTEXT.findAll(normalized).forEach { match ->
+            val inner = match.value.substring(1, match.value.length - 1).trim()
+            trailingExplicitVersionContext(inner)?.let(::add)
+        }
+
+        // Unlike album metadata, a whole title that happens to be "Live" or
+        // "Remix" is still a legitimate song title. Only a separator suffix is
+        // accepted outside brackets.
+        trailingExplicitVersionContext(normalized, allowWholeContext = false)?.let(::add)
+    }
+
+    return buildSet {
+        contexts
+            .flatMap { LrcLibClient.extractVersionQualifiers(it).toList() }
+            .forEach(::add)
+        if (instrumental) add("instrumental")
+    }
 }
 
 /**
@@ -91,10 +124,13 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
  * across both English and Japanese metadata, including labels made entirely from
  * version segments with no ordinary album-name prefix.
  */
-private fun trailingExplicitVersionContext(value: String): String? {
+private fun trailingExplicitVersionContext(
+    value: String,
+    allowWholeContext: Boolean = true
+): String? {
     val text = value.trim()
     if (text.isBlank()) return null
-    if (isExplicitVersionContext(text)) return text
+    if (allowWholeContext && isExplicitVersionContext(text)) return text
 
     val separatorMatches = VERSION_SEPARATOR.findAll(text).toList()
     if (separatorMatches.isEmpty()) return null
