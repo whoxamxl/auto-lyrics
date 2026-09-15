@@ -1,0 +1,104 @@
+name: Apply release tag guard
+
+on:
+  push:
+    branches:
+      - standalone-prep
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: standalone-prep
+      - name: Add tag reuse guard
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              ".github/workflows/build.yml",
+              '''      - name: Validate release version
+                  if: env.IS_RELEASE == 'true'
+                  shell: bash
+                  run: |
+                    EXPECTED_TAG="v${{ steps.version.outputs.name }}"
+                    if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                      ACTUAL_TAG="${GITHUB_REF#refs/tags/}"
+                      if [[ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]]; then
+                        echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
+                        exit 1
+                      fi
+                    fi
+          ''',
+              '''      - name: Validate release version
+                  if: env.IS_RELEASE == 'true'
+                  shell: bash
+                  run: |
+                    EXPECTED_TAG="v${{ steps.version.outputs.name }}"
+                    if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                      ACTUAL_TAG="${GITHUB_REF#refs/tags/}"
+                      if [[ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]]; then
+                        echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
+                        exit 1
+                      fi
+                    elif git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1; then
+                      echo "Release tag already exists: $EXPECTED_TAG" >&2
+                      echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
+                      exit 1
+                    fi
+          '''
+          )
+
+          replace_once(
+              "RELEASE.md",
+              '''Do not create the tag manually when using this path.
+          
+          ### 4. Verify CI
+          ''',
+              '''Do not create the tag manually when using this path.
+          
+          Before pushing, verify that `vX.Y.Z` is unused:
+          
+          ```powershell
+          git ls-remote --tags origin refs/tags/vX.Y.Z
+          ```
+          
+          This command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if the derived tag already exists.
+          
+          ### 4. Verify CI
+          '''
+          )
+
+          replace_once(
+              "RELEASE.md",
+              '''2. validate release version/tag consistency,
+          ''',
+              '''2. validate release version/tag consistency and reject tag reuse,
+          '''
+          )
+
+          Path(".github/workflows/apply-release-tag-guard.yml").unlink()
+          PY
+      - name: Commit tag guard
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Reject reused release tags"
+          git push origin HEAD:standalone-prep
