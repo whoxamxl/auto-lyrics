@@ -34,9 +34,9 @@ Release v1.12.0     → release build
 Bump version to 1.12.0 → ordinary main CI build
 ```
 
-For the main-commit path, `softprops/action-gh-release` creates/updates the tag derived from `versionName` and targets the release commit SHA.
+For the main-commit path, `softprops/action-gh-release` creates the unused tag derived from `versionName` and targets the release commit SHA. The workflow rejects the release before publishing if that tag already exists remotely.
 
-For the tag path, the workflow additionally validates that the pushed tag exactly matches `v${versionName}`.
+For the tag path, the workflow validates that the pushed tag exactly matches `v${versionName}`.
 
 ## Required GitHub Actions secrets
 
@@ -91,20 +91,29 @@ git push origin main
 
 That single push starts the release workflow. Do **not** create the tag manually when using this path.
 
+Before pushing, verify that the derived tag is unused:
+
+```powershell
+git ls-remote --tags origin refs/tags/vX.Y.Z
+```
+
+The command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if `vX.Y.Z` already exists.
+
 ### 4. Verify the workflow
 
 The release job should:
 
 1. read `versionName`,
-2. validate PetitLyrics release secrets,
-3. run unit tests,
-4. run lint,
-5. build the minified release APK,
-6. copy it to `auto-lyrics-X.Y.Z.apk`,
-7. upload the workflow artifact,
-8. create tag `vX.Y.Z`,
-9. publish GitHub Release `vX.Y.Z`,
-10. attach the APK and generate release notes.
+2. validate tag/version consistency and reject tag reuse,
+3. validate PetitLyrics release secrets,
+4. run unit tests,
+5. run lint,
+6. build the minified release APK,
+7. copy it to `auto-lyrics-X.Y.Z.apk`,
+8. upload the workflow artifact,
+9. create tag `vX.Y.Z`,
+10. publish GitHub Release `vX.Y.Z`,
+11. attach the APK and generate release notes.
 
 This is the path used for `v1.12.0`.
 
@@ -144,7 +153,7 @@ For either release trigger, the Linux `build` job performs:
 1. checkout,
 2. JDK 17 / Gradle setup,
 3. read `versionName`,
-4. validate tag/version consistency when triggered by a tag,
+4. validate tag/version consistency and reject tag reuse for the main-commit path,
 5. inject and validate PetitLyrics release configuration,
 6. `testDebugUnitTest`,
 7. `lintDebug`,
