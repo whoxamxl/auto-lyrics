@@ -57,6 +57,10 @@ jobs:
               echo "Release tag/version mismatch: tag=$ACTUAL_TAG version=${{ steps.version.outputs.name }}" >&2
               exit 1
             fi
+          elif git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $EXPECTED_TAG" >&2
+            echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
+            exit 1
           fi
 
       - name: Validate PetitLyrics release configuration
