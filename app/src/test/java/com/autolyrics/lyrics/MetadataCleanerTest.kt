@@ -22,4 +22,20 @@ class MetadataCleanerTest {
             MetadataCleaner.cleanAlbum("Album (Deluxe Remastered Edition)")
         )
     }
+
+    @Test
+    fun doesNotPromoteIncidentalLiveInsideAlbumEditionLabel() {
+        assertEquals(
+            "Album",
+            MetadataCleaner.cleanAlbum("Album (We Live Here — Deluxe Edition)")
+        )
+    }
+
+    @Test
+    fun preservesOnlyExplicitVersionMarkerInsideMixedAlbumEditionLabel() {
+        assertEquals(
+            "Album (Remastered)",
+            MetadataCleaner.cleanAlbum("Album (We Live Here — Remastered Deluxe Edition)")
+        )
+    }
 }
