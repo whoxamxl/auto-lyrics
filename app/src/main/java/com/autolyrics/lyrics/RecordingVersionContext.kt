@@ -52,9 +52,9 @@ private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
 
 /**
  * Extract recording-version evidence from album metadata only when the marker is
- * presented as an explicit edition/version context. Bracketed labels and each
- * suffix segment after a conventional separator use the same classifier so
- * ordinary names such as "Live Through This" cannot become version evidence.
+ * presented as an explicit edition/version context. Bracketed labels and suffixes
+ * after conventional separators use the same classifier so ordinary album prose
+ * cannot become version evidence merely because it contains a qualifier word.
  */
 internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     if (value.isBlank()) return emptySet()
@@ -63,25 +63,47 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     val contexts = buildList {
         BRACKETED_ALBUM_CONTEXT.findAll(normalized).forEach { match ->
             val inner = match.value.substring(1, match.value.length - 1).trim()
-            if (isExplicitVersionContext(inner)) add(inner)
+            longestExplicitVersionSuffix(inner)?.let(::add)
         }
 
-        // Inspect every suffix segment independently. This makes the final label in
-        // "Album: Subtitle: Live" visible without letting the ordinary album-name
-        // prefix participate as version evidence.
-        VERSION_SEPARATOR.split(normalized)
-            .drop(1)
-            .map(String::trim)
-            .filter(String::isNotBlank)
-            .filter(::isExplicitVersionContext)
-            .forEach(::add)
-
-        if (isExplicitVersionContext(normalized)) add(normalized)
+        longestExplicitVersionSuffix(normalized)?.let(::add)
     }
 
     return contexts
         .flatMap { LrcLibClient.extractVersionQualifiers(it).toList() }
         .toSet()
+}
+
+/**
+ * Return the longest suffix that is wholly version-shaped.
+ *
+ * Examples:
+ * - `Album: Subtitle: Live` -> `Live`
+ * - `Album: Live: Remastered` -> `Live: Remastered`
+ * - `Album: Live: Subtitle` -> null
+ * - `Live Through This: Remastered` -> `Remastered`
+ *
+ * Starting from the right prevents ordinary prefix metadata from participating in
+ * the decision, while extending left across consecutive version-shaped segments
+ * preserves compound contexts such as Live + Remastered.
+ */
+private fun longestExplicitVersionSuffix(value: String): String? {
+    val text = value.trim()
+    if (text.isBlank()) return null
+    if (isExplicitVersionContext(text)) return text
+
+    var best: String? = null
+    for (separator in VERSION_SEPARATOR.findAll(text).toList().asReversed()) {
+        val suffix = text.substring(separator.range.last + 1).trim()
+        if (suffix.isBlank()) continue
+
+        if (isExplicitVersionContext(suffix)) {
+            best = suffix
+        } else if (best != null) {
+            break
+        }
+    }
+    return best
 }
 
 private fun isExplicitVersionContext(value: String): Boolean {
