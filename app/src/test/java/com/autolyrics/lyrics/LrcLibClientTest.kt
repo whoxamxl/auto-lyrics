@@ -68,6 +68,13 @@ class LrcLibClientTest {
         )
         assertTrue(
             LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Subtitle: Live"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
                 requestedTitle = "Song (Remastered)",
                 candidateTitle = "Song",
                 candidateAlbum = "Album: Remastered"
@@ -85,6 +92,24 @@ class LrcLibClientTest {
                 requestedTitle = "Song (Remastered)",
                 candidateTitle = "Song",
                 candidateAlbum = "Album (Deluxe Remastered Edition)"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (20th Anniversary Remastered Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun japaneseAnniversaryRemasterEvidenceIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名（リマスター）",
+                candidateTitle = "曲名",
+                candidateAlbum = "アルバム（20周年リマスター版）"
             )
         )
     }
