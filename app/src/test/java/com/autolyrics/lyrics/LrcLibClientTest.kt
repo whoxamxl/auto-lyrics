@@ -84,6 +84,13 @@ class LrcLibClientTest {
                 requestedAlbum = "Live Through This"
             )
         )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album - Live Through This"
+            )
+        )
     }
 
     @Test
@@ -129,6 +136,13 @@ class LrcLibClientTest {
                 requestedTitle = "曲名",
                 candidateTitle = "曲名（ライブ）",
                 requestedAlbum = "アルバム - ライブバージョン"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブドア"
             )
         )
     }
