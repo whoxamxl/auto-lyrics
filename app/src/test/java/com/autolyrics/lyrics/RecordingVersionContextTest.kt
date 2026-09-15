@@ -36,6 +36,24 @@ class RecordingVersionContextTest {
     }
 
     @Test
+    fun compoundJapaneseTitleQualifiersAreExplicitVersionEvidence() {
+        assertEquals(
+            setOf("live", "remaster"),
+            extractTitleVersionQualifiers("曲名（ライブ・リマスター）")
+        )
+        assertEquals(
+            setOf("live", "remaster"),
+            extractTitleVersionQualifiers("曲名（ライブ版・リマスター版）")
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名（ライブ・リマスター）",
+                candidateTitle = "曲名"
+            )
+        )
+    }
+
+    @Test
     fun incidentalVersionWordsInBaseTitlesRemainNonVersionEvidence() {
         assertEquals(emptySet<String>(), extractTitleVersionQualifiers("Live Forever"))
         assertEquals(emptySet<String>(), extractTitleVersionQualifiers("Remix to Ignition"))
