@@ -3,13 +3,13 @@ package com.autolyrics.media
 /**
  * Process-wide demand state for lyric work.
  *
- * Demand is active while at least one phone Activity is started or while the
- * device is projecting to Android Auto. MediaListenerService keeps monitoring
- * sessions independently and only forwards them to MediaTracker while this
- * demand is active.
+ * Demand is active while the phone app process is in the foreground or while
+ * the device is projecting to Android Auto. MediaListenerService keeps
+ * monitoring sessions independently and only forwards them to MediaTracker
+ * while this demand is active.
  */
 internal object LyricsDemandController {
-    private var startedPhoneActivities = 0
+    private var phoneForeground = false
     private var carProjectionConnected = false
     private val listeners = linkedSetOf<(Boolean) -> Unit>()
 
@@ -25,15 +25,9 @@ internal object LyricsDemandController {
         listeners -= listener
     }
 
-    fun onPhoneActivityStarted() {
-        startedPhoneActivities += 1
-        publishIfChanged()
-    }
-
-    fun onPhoneActivityStopped() {
-        if (startedPhoneActivities > 0) {
-            startedPhoneActivities -= 1
-        }
+    fun setPhoneForeground(foreground: Boolean) {
+        if (phoneForeground == foreground) return
+        phoneForeground = foreground
         publishIfChanged()
     }
 
@@ -44,7 +38,7 @@ internal object LyricsDemandController {
     }
 
     private fun publishIfChanged() {
-        val next = startedPhoneActivities > 0 || carProjectionConnected
+        val next = phoneForeground || carProjectionConnected
         if (next == isActive) return
 
         isActive = next
@@ -52,7 +46,7 @@ internal object LyricsDemandController {
     }
 
     internal fun resetForTest() {
-        startedPhoneActivities = 0
+        phoneForeground = false
         carProjectionConnected = false
         isActive = false
         listeners.clear()
