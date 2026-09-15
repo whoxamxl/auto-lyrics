@@ -66,6 +66,13 @@ class LrcLibClientTest {
                 candidateAlbum = "Album (Remastered)"
             )
         )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (Deluxe Remastered Edition)"
+            )
+        )
     }
 
     @Test
@@ -75,6 +82,17 @@ class LrcLibClientTest {
                 requestedTitle = "Song",
                 candidateTitle = "Song (Live)",
                 requestedAlbum = "Live Through This"
+            )
+        )
+    }
+
+    @Test
+    fun ordinaryBracketedAlbumSubtitleContainingLiveIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album (We Live Here)"
             )
         )
     }
