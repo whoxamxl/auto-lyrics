@@ -70,6 +70,27 @@ class LyricWordDisplayRangeTest {
     }
 
     @Test
+    fun repeatedTokensPreferEarliestEquivalentMatch() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello HELLO",
+            words = listOf(
+                LyricWord(1_000L, "HELLO"),
+                LyricWord(1_500L, "HELLO")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(0, 5),
+            LyricWordLayout.displayRangeForToken(line, 0)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(6, 11),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+    }
+
+    @Test
     fun unevenCaseMismatchesUseActualLexicalPositions() {
         val line = LyricLine(
             timeMs = 1_000L,
