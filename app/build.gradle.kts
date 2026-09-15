@@ -8,7 +8,7 @@ fun loadDotEnv(file: java.io.File): Map<String, String> {
 
     return file.readLines()
         .map { it.trim() }
-        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('='))
         .associate { line ->
             val (key, rawValue) = line.split('=', limit = 2)
             val value = rawValue.trim()
@@ -49,8 +49,8 @@ android {
         applicationId = "com.autolyrics"
         minSdk = 26
         targetSdk = 34
-        versionCode = 38
-        versionName = "1.12.1"
+        versionCode = 39
+        versionName = "1.13.0"
 
         buildConfigField(
             "String",
