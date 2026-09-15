@@ -25,25 +25,32 @@ class LyricsDemandControllerTest {
     }
 
     @Test
-    fun phoneForegroundActivatesAndLastPhoneStopDeactivates() {
-        LyricsDemandController.onPhoneActivityStarted()
-        LyricsDemandController.onPhoneActivityStarted()
-        LyricsDemandController.onPhoneActivityStopped()
+    fun phoneForegroundActivatesAndBackgroundDeactivates() {
+        LyricsDemandController.setPhoneForeground(true)
 
         assertTrue(LyricsDemandController.isActive)
         assertEquals(listOf(true), changes)
 
-        LyricsDemandController.onPhoneActivityStopped()
+        LyricsDemandController.setPhoneForeground(false)
 
         assertFalse(LyricsDemandController.isActive)
         assertEquals(listOf(true, false), changes)
     }
 
     @Test
-    fun carProjectionKeepsDemandActiveAfterPhoneCloses() {
-        LyricsDemandController.onPhoneActivityStarted()
+    fun duplicateProcessLifecycleEventsDoNotDropDemand() {
+        LyricsDemandController.setPhoneForeground(true)
+        LyricsDemandController.setPhoneForeground(true)
+
+        assertTrue(LyricsDemandController.isActive)
+        assertEquals(listOf(true), changes)
+    }
+
+    @Test
+    fun carProjectionKeepsDemandActiveAfterPhoneBackgrounds() {
+        LyricsDemandController.setPhoneForeground(true)
         LyricsDemandController.setCarProjectionConnected(true)
-        LyricsDemandController.onPhoneActivityStopped()
+        LyricsDemandController.setPhoneForeground(false)
 
         assertTrue(LyricsDemandController.isActive)
         assertEquals(listOf(true), changes)
@@ -63,12 +70,12 @@ class LyricsDemandControllerTest {
     }
 
     @Test
-    fun duplicateAndUnbalancedEventsDoNotEmitExtraChanges() {
-        LyricsDemandController.onPhoneActivityStopped()
+    fun duplicateInactiveAndProjectionEventsDoNotEmitExtraChanges() {
+        LyricsDemandController.setPhoneForeground(false)
         LyricsDemandController.setCarProjectionConnected(false)
         LyricsDemandController.setCarProjectionConnected(true)
         LyricsDemandController.setCarProjectionConnected(true)
-        LyricsDemandController.onPhoneActivityStopped()
+        LyricsDemandController.setPhoneForeground(false)
 
         assertTrue(LyricsDemandController.isActive)
         assertEquals(listOf(true), changes)
