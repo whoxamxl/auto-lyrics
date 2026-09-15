@@ -81,13 +81,15 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
  * - `Album: Subtitle: Live` -> `Live`
  * - `Album: Live: Remastered` -> `Live: Remastered`
  * - `アルバム: ライブ版: リマスター版` -> `ライブ版: リマスター版`
+ * - `ライブ版: リマスター版` -> `ライブ版: リマスター版`
  * - `Album: Live: Subtitle` -> null
  * - `Live Through This: Remastered` -> `Remastered`
  *
  * Requiring the final segment to be version-shaped prevents a version-looking
  * middle segment from leaking through ordinary trailing prose. Extending left only
  * while each adjacent segment is independently explicit preserves compound labels
- * across both English and Japanese metadata.
+ * across both English and Japanese metadata, including labels made entirely from
+ * version segments with no ordinary album-name prefix.
  */
 private fun trailingExplicitVersionContext(value: String): String? {
     val text = value.trim()
@@ -109,7 +111,7 @@ private fun trailingExplicitVersionContext(value: String): String? {
 
     var firstVersionSegment = segments.lastIndex
     while (
-        firstVersionSegment - 1 >= 1 &&
+        firstVersionSegment - 1 >= 0 &&
         isExplicitVersionContext(segments[firstVersionSegment - 1])
     ) {
         firstVersionSegment--
