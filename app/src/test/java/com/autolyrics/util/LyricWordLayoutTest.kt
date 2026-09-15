@@ -151,6 +151,25 @@ class LyricWordLayoutTest {
     }
 
     @Test
+    fun incidentalFineGrainedAnchorsNeedSubstantiveCoverage() {
+        val line = LyricLine(
+            timeMs = 0L,
+            text = "a long day",
+            words = listOf(
+                LyricWord(0L, "A"),
+                LyricWord(100L, "X"),
+                LyricWord(200L, "G"),
+                LyricWord(300L, "Z")
+            )
+        )
+
+        val rendered = LyricWordLayout.renderedLine(line)
+
+        assertEquals("A X G Z", rendered.text)
+        assertEquals("A X 【G】 Z", LyricWordLayout.karaokeText(line, 2))
+    }
+
+    @Test
     fun fallsBackToLanguageAppropriateSeparatorWhenAlignmentFails() {
         val english = LyricLine(
             timeMs = 0L,
