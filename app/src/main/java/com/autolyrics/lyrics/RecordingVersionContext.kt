@@ -9,7 +9,7 @@ private const val JAPANESE_VERSION_MARKER =
     "(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?"
 
 private val BRACKETED_ALBUM_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
-private val SEPARATOR_ALBUM_CONTEXT = Regex("""\s[-–—:]\s(.+)$""")
+private val SEPARATOR_ALBUM_CONTEXT = Regex("""(?:\s[-–—]\s|:\s*)(.+)$""")
 private val LIVE_LOCATION_CONTEXT = Regex(
     """^\s*(?:live|ライブ)\s+(?:at|from|in)\b.*$""",
     RegexOption.IGNORE_CASE
@@ -18,7 +18,7 @@ private val ENGLISH_VERSION_TOKEN = Regex(
     """\b$ENGLISH_VERSION_MARKER\b""",
     RegexOption.IGNORE_CASE
 )
-private val ENGLISH_CONTEXT_WORD = Regex("""[a-z]+|\d{4}""")
+private val CONTEXT_TOKEN = Regex("""[\p{L}\p{N}]+""")
 private val JAPANESE_VERSION_CONTEXT = Regex(
     """^\s*$JAPANESE_VERSION_MARKER\s*$"""
 )
@@ -89,13 +89,16 @@ private fun isExplicitVersionContext(value: String): Boolean {
     if (LIVE_LOCATION_CONTEXT.matches(text)) return true
     if (!ENGLISH_VERSION_TOKEN.containsMatchIn(text)) return false
 
-    val words = ENGLISH_CONTEXT_WORD.findAll(text.lowercase(Locale.ROOT))
+    // Inspect every Unicode letter/number token, not only ASCII words. This keeps
+    // mixed prose such as "LIVE・ドア" from silently dropping the non-Latin part
+    // and being misclassified as an explicit live-version label.
+    val tokens = CONTEXT_TOKEN.findAll(text.lowercase(Locale.ROOT))
         .map { it.value }
         .toList()
-    if (words.isEmpty()) return false
+    if (tokens.isEmpty()) return false
 
-    return words.all { word ->
-        word in ALLOWED_ENGLISH_CONTEXT_WORDS ||
-            word.toIntOrNull()?.let { it in 1900..2199 } == true
+    return tokens.all { token ->
+        token in ALLOWED_ENGLISH_CONTEXT_WORDS ||
+            token.toIntOrNull()?.let { it in 1900..2199 } == true
     }
 }
