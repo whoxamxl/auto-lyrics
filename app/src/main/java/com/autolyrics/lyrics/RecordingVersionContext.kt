@@ -3,13 +3,18 @@ package com.autolyrics.lyrics
 import java.text.Normalizer
 import java.util.Locale
 
+private const val ENGLISH_VERSION_MARKER =
+    "(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo)"
+private const val JAPANESE_VERSION_MARKER =
+    "(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?"
+
 private val BRACKETED_ALBUM_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
 private val SUFFIX_ALBUM_VERSION_CONTEXT = Regex(
-    """\s[-–—:]\s(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo|ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)\b.*$""",
+    """\s[-–—:]\s(?:(?:$ENGLISH_VERSION_MARKER)\b|$JAPANESE_VERSION_MARKER).*$""",
     RegexOption.IGNORE_CASE
 )
 private val WHOLE_ALBUM_VERSION_CONTEXT = Regex(
-    """^\s*(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo|ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)\s*$""",
+    """^\s*(?:(?:$ENGLISH_VERSION_MARKER)\b|$JAPANESE_VERSION_MARKER)\s*$""",
     RegexOption.IGNORE_CASE
 )
 private val LIVE_LOCATION_ALBUM_CONTEXT = Regex(
@@ -17,12 +22,12 @@ private val LIVE_LOCATION_ALBUM_CONTEXT = Regex(
     RegexOption.IGNORE_CASE
 )
 private val ENGLISH_VERSION_TOKEN = Regex(
-    """\b(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo)\b""",
+    """\b$ENGLISH_VERSION_MARKER\b""",
     RegexOption.IGNORE_CASE
 )
 private val ENGLISH_CONTEXT_WORD = Regex("""[a-z]+|\d{4}""")
 private val JAPANESE_BRACKET_VERSION_CONTEXT = Regex(
-    """^\s*(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?\s*$"""
+    """^\s*$JAPANESE_VERSION_MARKER\s*$"""
 )
 private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
     "live",
