@@ -61,6 +61,20 @@ class LrcLibClientTest {
         )
         assertTrue(
             LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Live"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
                 requestedTitle = "Song (Remastered)",
                 candidateTitle = "Song",
                 candidateAlbum = "Album (Remastered)"
@@ -107,6 +121,24 @@ class LrcLibClientTest {
                 requestedTitle = "Song",
                 candidateTitle = "Song (Live)",
                 requestedAlbum = "Album (We Live Here — Deluxe Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun mixedScriptProseAroundEnglishMarkerIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - LIVE・ドア"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム（LIVE・ドア）"
             )
         )
     }
