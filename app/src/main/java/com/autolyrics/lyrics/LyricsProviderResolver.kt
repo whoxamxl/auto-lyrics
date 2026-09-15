@@ -128,7 +128,15 @@ object LyricsProviderResolver {
         track: TrackInfo,
         candidate: LyricsProviderCandidate
     ): Double? {
-        if (!LrcLibClient.versionsCompatible(track.title, candidate.title)) return null
+        if (!LrcLibClient.versionsCompatible(
+                requestedTitle = track.title,
+                candidateTitle = candidate.title,
+                requestedAlbum = track.album,
+                candidateAlbum = candidate.album
+            )
+        ) {
+            return null
+        }
 
         val titleScore = LrcLibClient.stringSimilarity(track.title, candidate.title)
         if (titleScore < MIN_TITLE_SCORE) return null
