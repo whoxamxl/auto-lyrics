@@ -148,6 +148,13 @@ class LrcLibClientTest {
                 requestedAlbum = "アルバム: ライブ版: リマスター版"
             )
         )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ・リマスター）",
+                requestedAlbum = "ライブ版: リマスター版"
+            )
+        )
         assertFalse(
             LrcLibClient.versionsCompatible(
                 requestedTitle = "曲名",
