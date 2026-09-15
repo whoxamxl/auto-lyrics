@@ -15,8 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Patch PerformanceLyricsView
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("app/src/main/java/com/autolyrics/ui/PerformanceLyricsView.kt")
@@ -77,6 +78,7 @@ jobs:
           path.write_text(text)
 
           Path(".github/workflows/temp-performance-patch.yml").unlink()
+          PY
       - name: Commit patch and remove temporary workflow
         run: |
           git config user.name "github-actions[bot]"
