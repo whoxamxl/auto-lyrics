@@ -80,6 +80,17 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun fullWidthAlbumVersionPunctuationIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム（ライブ）"
+            )
+        )
+    }
+
+    @Test
     fun matchingTitleVersionsIgnoreExtraAlbumEditionMarker() {
         assertTrue(
             LrcLibClient.versionsCompatible(

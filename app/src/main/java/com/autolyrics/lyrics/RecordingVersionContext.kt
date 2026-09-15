@@ -1,5 +1,7 @@
 package com.autolyrics.lyrics
 
+import java.text.Normalizer
+
 private val BRACKETED_ALBUM_VERSION_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
 private val SUFFIX_ALBUM_VERSION_CONTEXT = Regex(
     """\s[-–—:]\s(?:live|acoustic|remix(?:ed)?|remaster(?:ed)?|instrumental|edit(?:ed)?|extended|demo|ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)\b.*$""",
@@ -23,11 +25,12 @@ private val LIVE_LOCATION_ALBUM_CONTEXT = Regex(
 internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     if (value.isBlank()) return emptySet()
 
+    val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
     val contexts = buildList {
-        BRACKETED_ALBUM_VERSION_CONTEXT.findAll(value).forEach { add(it.value) }
-        SUFFIX_ALBUM_VERSION_CONTEXT.find(value)?.let { add(it.value) }
-        WHOLE_ALBUM_VERSION_CONTEXT.find(value)?.let { add(it.value) }
-        LIVE_LOCATION_ALBUM_CONTEXT.find(value)?.let { add(it.value) }
+        BRACKETED_ALBUM_VERSION_CONTEXT.findAll(normalized).forEach { add(it.value) }
+        SUFFIX_ALBUM_VERSION_CONTEXT.find(normalized)?.let { add(it.value) }
+        WHOLE_ALBUM_VERSION_CONTEXT.find(normalized)?.let { add(it.value) }
+        LIVE_LOCATION_ALBUM_CONTEXT.find(normalized)?.let { add(it.value) }
     }
 
     return contexts
