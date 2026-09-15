@@ -16,6 +16,14 @@ class MetadataCleanerTest {
     }
 
     @Test
+    fun doesNotPromoteIncidentalLiveInsidePresentationLabel() {
+        assertEquals(
+            "Song",
+            MetadataCleaner.cleanTitle("Song (Official We Live Here Video)")
+        )
+    }
+
+    @Test
     fun preservesRemasterMarkerInsideAlbumEditionLabel() {
         assertEquals(
             "Album (Remastered)",
