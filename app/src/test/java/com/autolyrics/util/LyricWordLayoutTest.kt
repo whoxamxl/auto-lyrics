@@ -2,6 +2,7 @@ package com.autolyrics.util
 
 import com.autolyrics.model.LyricLine
 import com.autolyrics.model.LyricWord
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -111,6 +112,42 @@ class LyricWordLayoutTest {
         LyricWordLayout.karaokeText(line, 1)
 
         assertEquals(words, line.words)
+    }
+
+    @Test
+    fun credibleFragmentMismatchRendersSourceTextWithReadableRanges() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(
+                LyricWord(1_000L, "HE"),
+                LyricWord(1_150L, "LLO"),
+                LyricWord(1_500L, "WORLD")
+            )
+        )
+
+        val rendered = LyricWordLayout.renderedLine(line)
+
+        assertEquals("Hello world", rendered.text)
+        assertArrayEquals(intArrayOf(0, 0, 6), rendered.tokenStart)
+        assertArrayEquals(intArrayOf(5, 5, 11), rendered.tokenEnd)
+    }
+
+    @Test
+    fun incidentalSingleMatchKeepsLegacyProviderFallback() {
+        val line = LyricLine(
+            timeMs = 0L,
+            text = "different line text",
+            words = listOf(
+                LyricWord(0L, "line"),
+                LyricWord(1L, "one")
+            )
+        )
+
+        val rendered = LyricWordLayout.renderedLine(line)
+
+        assertEquals("line one", rendered.text)
+        assertEquals("line 【one】", LyricWordLayout.karaokeText(line, 1))
     }
 
     @Test
