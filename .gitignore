@@ -12,6 +12,9 @@ local.properties
 /app/release
 *.apk
 *.aab
+*.jks
+*.keystore
+*.p12
 app/debug.keystore
 app/key.pem
 app/cert.pem

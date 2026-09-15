@@ -1,22 +1,18 @@
-# Auto Lyrics — Release Guide
+# OpenAutoLyrics — Release Guide
 
-This is the release checklist for maintainers. The GitHub Actions workflow can publish a GitHub Release from either a dedicated `Release vX.Y.Z` commit on `main` or a matching `vX.Y.Z` tag push.
-
-The **recommended path** is the atomic release commit. It updates the Android version and triggers the release in one push, which avoids a separate manual tag step.
+OpenAutoLyrics publishes release APKs through GitHub Actions. Release signing material is never stored in the repository.
 
 ## Release invariant
 
-The following values must describe the same release:
+These values must describe the same release:
 
 ```text
 app/build.gradle.kts: versionName = "X.Y.Z"
 Git tag:              vX.Y.Z
-Generated APK:        auto-lyrics-X.Y.Z.apk
+Generated APK:        OpenAutoLyrics-X.Y.Z.apk
 ```
 
-`versionCode` must also increase for every new Android release.
-
-The workflow derives the tag name and APK filename from `versionName`. Keep the release commit message, `versionName`, generated tag, and APK version aligned.
+`versionCode` must increase for every Android release.
 
 ## Release triggers
 
@@ -27,20 +23,11 @@ The workflow derives the tag name and APK filename from `versionName`. Keep the 
 2. push to main with a head commit message starting with "Release v"
 ```
 
-Examples:
-
-```text
-Release v1.12.0     → release build
-Bump version to 1.12.0 → ordinary main CI build
-```
-
-For the main-commit path, `softprops/action-gh-release` creates/updates the tag derived from `versionName` and targets the release commit SHA.
-
-For the tag path, the workflow additionally validates that the pushed tag exactly matches `v${versionName}`.
+The recommended path is the atomic `Release vX.Y.Z` commit so the version bump and release target remain aligned.
 
 ## Required GitHub Actions secrets
 
-Release builds require these repository secrets:
+### Provider configuration
 
 ```text
 PETITLYRICS_USER_ID
@@ -49,9 +36,47 @@ PETITLYRICS_PKG_NAME
 PETITLYRICS_CLIENT_APP_ID
 ```
 
-The workflow validates all four before building a release APK.
+### Release signing
 
-PR and ordinary `main` builds intentionally do not receive these values. Those CI artifacts build with PetitLyrics disabled unless another non-secret fallback is explicitly present in the checkout.
+```text
+OPENAUTOLYRICS_KEYSTORE_BASE64
+OPENAUTOLYRICS_KEYSTORE_PASSWORD
+OPENAUTOLYRICS_KEY_ALIAS
+OPENAUTOLYRICS_KEY_PASSWORD
+```
+
+Release CI validates all required values before building. Ordinary PR/main debug builds do not need the release key.
+
+## Create the standalone release key
+
+Create a new key specifically for OpenAutoLyrics. Do **not** reuse the historical `app/signing.p12` that was committed to the old fork history.
+
+Example:
+
+```powershell
+keytool -genkeypair -v -keystore openautolyrics-release.p12 -storetype PKCS12 -alias openautolyrics -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Keep the resulting `.p12` outside the repository and back it up securely. Losing this key prevents future APKs signed with it from updating the same installed application identity.
+
+To encode the keystore for the GitHub secret on Windows PowerShell:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("openautolyrics-release.p12")) | Set-Clipboard
+```
+
+Paste that value into `OPENAUTOLYRICS_KEYSTORE_BASE64` and configure the three matching password/alias secrets.
+
+The workflow decodes the key only into the GitHub runner's temporary directory and exposes the signing configuration to Gradle through:
+
+```text
+RELEASE_STORE_FILE
+RELEASE_STORE_PASSWORD
+RELEASE_KEY_ALIAS
+RELEASE_KEY_PASSWORD
+```
+
+No release key file or password belongs in Git.
 
 ## Recommended atomic release procedure
 
@@ -73,15 +98,7 @@ versionCode = <previous + 1>
 versionName = "X.Y.Z"
 ```
 
-Check the diff:
-
-```powershell
-git diff -- app/build.gradle.kts
-```
-
-### 3. Commit with the release trigger message
-
-The commit message must start with `Release v`:
+### 3. Commit with the release trigger
 
 ```powershell
 git add app/build.gradle.kts
@@ -89,141 +106,76 @@ git commit -m "Release vX.Y.Z"
 git push origin main
 ```
 
-That single push starts the release workflow. Do **not** create the tag manually when using this path.
+Do not create the tag manually when using this path.
 
-### 4. Verify the workflow
+Before pushing, verify that `vX.Y.Z` is unused:
+
+```powershell
+git ls-remote --tags origin refs/tags/vX.Y.Z
+```
+
+This command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if the derived tag already exists.
+
+### 4. Verify CI
 
 The release job should:
 
 1. read `versionName`,
-2. validate PetitLyrics release secrets,
-3. run unit tests,
-4. run lint,
-5. build the minified release APK,
-6. copy it to `auto-lyrics-X.Y.Z.apk`,
-7. upload the workflow artifact,
-8. create tag `vX.Y.Z`,
-9. publish GitHub Release `vX.Y.Z`,
-10. attach the APK and generate release notes.
+2. validate release version/tag consistency and reject tag reuse,
+3. validate PetitLyrics secrets,
+4. validate release-signing secrets,
+5. create the temporary release keystore,
+6. run unit tests,
+7. run lint,
+8. build the minified signed release APK,
+9. publish `OpenAutoLyrics-X.Y.Z.apk`,
+10. create/update GitHub Release `vX.Y.Z`.
 
-This is the path used for `v1.12.0`.
+## Alternative tag-driven release
 
-## Alternative tag-driven release procedure
-
-A traditional tag push remains supported.
-
-First commit the version bump to `main` with a normal non-release message and allow ordinary CI to pass:
-
-```powershell
-git add app/build.gradle.kts
-git commit -m "Bump version to X.Y.Z"
-git push origin main
-```
-
-Verify:
-
-```powershell
-Select-String -Path .\app\build.gradle.kts -Pattern 'versionCode|versionName'
-```
-
-Then create the **exact matching tag**:
+Commit the version bump normally, let CI pass, then push the exact matching tag:
 
 ```powershell
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-For this path, a mismatch between the pushed tag and `versionName` fails `Validate release version`.
+A mismatch between the tag and `versionName` fails release validation.
 
-Do not reuse an existing version tag.
+## Local builds
 
-## What release CI runs
-
-For either release trigger, the Linux `build` job performs:
-
-1. checkout,
-2. JDK 17 / Gradle setup,
-3. read `versionName`,
-4. validate tag/version consistency when triggered by a tag,
-5. inject and validate PetitLyrics release configuration,
-6. `testDebugUnitTest`,
-7. `lintDebug`,
-8. `assembleRelease`,
-9. copy the APK to:
-
-   ```text
-   app/build/outputs/distribution/auto-lyrics-X.Y.Z.apk
-   ```
-
-10. upload the APK as a workflow artifact,
-11. create/update GitHub Release `vX.Y.Z`,
-12. attach the APK and generate release notes.
-
-The release APK is minified and signed using the repository's configured signing setup.
-
-The Windows regression job does **not** run on release pushes. It runs only for pull requests and manual `workflow_dispatch`. Release candidates should therefore already have passed Windows regression through the PR that introduced the code, or via a manual workflow run when needed.
-
-## Post-release verification
-
-Open the new GitHub Release and verify all of the following:
-
-- release tag is `vX.Y.Z`,
-- release points to the intended commit,
-- attached file is `auto-lyrics-X.Y.Z.apk`,
-- release is not draft/prerelease unless intentionally requested,
-- Actions run completed successfully,
-- `Validate PetitLyrics release configuration` passed,
-- unit tests passed,
-- lint passed,
-- release APK build passed,
-- release notes cover the intended PR range.
-
-For a functional smoke test, install the release APK and verify:
-
-1. With Android Auto disconnected and Auto Lyrics closed, changing tracks in another media app does not start new provider resolution.
-2. Opening Auto Lyrics on the phone resolves the current media session.
-3. Connecting Android Auto activates lyric resolution without keeping the phone UI open.
-4. LRCLIB lookup works on a known synchronized track.
-5. Musixmatch lookup works on a known supported track.
-6. PetitLyrics works on a known supported track when release credentials are present.
-7. Karaoke mode can select a real WORD_SYNC candidate when it is near-equivalent to the standard winner.
-8. SyncLRC can contribute Enhanced-LRC timing on a known available track, while synced/plain-only responses remain ignored by that provider.
-9. Android Auto shows `Lyrics | Sync | More`.
-10. Current lyrics display the `▶` marker.
-11. Lyrics tab row count is 5 without translation / 3 with translation.
-12. Sync remains a fixed 3-row lyric preview.
-13. ±50 ms AA offset controls still update the view.
-
-## Local release-like build
-
-A local `.env` can be used for provider configuration, but it does not reproduce GitHub's repository-secret injection exactly.
+Debug builds use Android's standard debug signing configuration:
 
 ```powershell
 .\gradlew.bat testDebugUnitTest
 .\gradlew.bat lintDebug
-.\gradlew.bat assembleRelease
+.\gradlew.bat assembleDebug
 ```
 
-Output:
+A signed local release build requires all four `RELEASE_*` environment variables. Without them, Gradle can produce an unsigned release artifact, but that artifact must not be published as an OpenAutoLyrics release.
 
-```text
-app/build/outputs/apk/release/app-release.apk
-```
+## Post-release verification
 
-## If a release was created with the wrong version
+Verify:
 
-Prefer creating a new corrected release version rather than rewriting an already published release/tag.
+- tag is `vX.Y.Z`,
+- attached APK is `OpenAutoLyrics-X.Y.Z.apk`,
+- Actions completed successfully,
+- release signing validation passed,
+- tests and lint passed,
+- the APK installs and launches,
+- notification access works,
+- Android Auto discovers the app,
+- LRCLIB and Musixmatch resolve known tracks,
+- PetitLyrics works when configured,
+- Karaoke mode can select genuine word timing,
+- `Lyrics | Sync | More` and timing controls behave correctly.
 
-For example:
+## Standalone migration note
 
-1. bump `versionCode` and `versionName` correctly,
-2. commit the corrected version,
-3. publish the next unused release version,
-4. verify the generated tag and APK filename before considering the release complete.
-
-Avoid force-moving published release tags unless there is a specific reason and all consumers of that tag are understood.
+The old fork history contained `app/signing.p12` and its credentials. Treat that key as public/retired. Removing the file from the current tree does not erase it from historical commits; the security boundary is the new OpenAutoLyrics release key stored only outside Git and in GitHub Actions secrets.
 
 ## Related documentation
 
-- [README.md](README.md) — installation, user-facing features, local build basics.
-- [DEVELOPMENT.md](DEVELOPMENT.md) — architecture, provider demand, resolver, cache, provider formats, Android Auto implementation, regression checklist.
+- [README.md](README.md) — user-facing overview and installation
+- [DEVELOPMENT.md](DEVELOPMENT.md) — architecture, providers, resolver, cache, timing, and regression notes
