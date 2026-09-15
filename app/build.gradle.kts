@@ -59,6 +59,9 @@ check(releaseSigningValues.none { it != null } || releaseSigningConfigured) {
 }
 
 android {
+    // Keep the source namespace stable for this migration; the install/package
+    // identity is independent so OpenAutoLyrics does not reuse the retired
+    // Auto Lyrics signing identity.
     namespace = "com.autolyrics"
     compileSdk = 34
 
@@ -67,7 +70,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.autolyrics"
+        applicationId = "io.github.whoxamxl.openautolyrics"
         minSdk = 26
         targetSdk = 34
         versionCode = 38
