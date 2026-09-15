@@ -1,5 +1,6 @@
 package com.autolyrics.lyrics
 
+import java.text.Normalizer
 import java.util.Locale
 
 object MetadataCleaner {
@@ -15,6 +16,10 @@ object MetadataCleaner {
 
     private val TITLE_PRESENTATION_GROUP = Regex(
         """\s*[\(\[].*?\b(official|video|lyric|lyrics|audio|visualizer)\b.*?[\)\]]""",
+        RegexOption.IGNORE_CASE
+    )
+    private val TITLE_PRESENTATION_TOKEN = Regex(
+        """\b(?:official|video|lyric|lyrics|audio|visualizer)\b""",
         RegexOption.IGNORE_CASE
     )
     private val ALBUM_EDITION_GROUP = Regex(
@@ -35,9 +40,11 @@ object MetadataCleaner {
 
     fun cleanTitle(raw: String): String {
         var s = raw.trim()
-        // Remove presentation/platform labels while preserving recording-version
-        // evidence such as Live or Remastered when it shares the same bracket.
-        s = TITLE_PRESENTATION_GROUP.replace(s, ::preserveVersionMarkers)
+        // Presentation/platform labels are noise, but a genuine version marker
+        // inside that bracket still identifies a different recording. Preserve it
+        // only when the non-presentation remainder is itself version-shaped so an
+        // incidental word in ordinary prose cannot synthesize a version label.
+        s = TITLE_PRESENTATION_GROUP.replace(s, ::preserveExplicitTitleVersionMarkers)
         s = removeQualityTags(s)
         return s.trim().ifBlank { raw.trim() }
     }
@@ -53,24 +60,36 @@ object MetadataCleaner {
         return s.trim().ifBlank { raw.trim() }
     }
 
-    private fun preserveVersionMarkers(match: MatchResult): String {
-        val markers = RECORDING_VERSION_PATTERN.findAll(match.value)
-            .map { it.value.trim() }
-            .filter { it.isNotBlank() }
-            .distinctBy { it.lowercase(Locale.ROOT) }
-            .toList()
-        return if (markers.isEmpty()) "" else " (${markers.joinToString(" ")})"
+    private fun preserveExplicitTitleVersionMarkers(match: MatchResult): String {
+        val normalized = Normalizer.normalize(match.value, Normalizer.Form.NFKC).trim()
+        if (normalized.length < 2) return ""
+        val inner = normalized.substring(1, normalized.length - 1)
+        val versionContext = TITLE_PRESENTATION_TOKEN.replace(inner, " ")
+            .replace(Regex("""\s*[-–—:|]\s*"""), " ")
+            .replace(MULTI_SPACE, " ")
+            .trim()
+        if (versionContext.isBlank()) return ""
+
+        val explicitQualifiers = extractAlbumVersionQualifiers("($versionContext)")
+        return preserveAllowedVersionMarkers(match, explicitQualifiers)
     }
 
     private fun preserveExplicitAlbumVersionMarkers(match: MatchResult): String {
         val explicitQualifiers = extractAlbumVersionQualifiers(match.value)
-        if (explicitQualifiers.isEmpty()) return ""
+        return preserveAllowedVersionMarkers(match, explicitQualifiers)
+    }
+
+    private fun preserveAllowedVersionMarkers(
+        match: MatchResult,
+        allowedQualifiers: Set<String>
+    ): String {
+        if (allowedQualifiers.isEmpty()) return ""
 
         val markers = RECORDING_VERSION_PATTERN.findAll(match.value)
             .map { it.value.trim() }
             .filter { marker ->
                 LrcLibClient.extractVersionQualifiers(marker)
-                    .any { qualifier -> qualifier in explicitQualifiers }
+                    .any { qualifier -> qualifier in allowedQualifiers }
             }
             .distinctBy { it.lowercase(Locale.ROOT) }
             .toList()
