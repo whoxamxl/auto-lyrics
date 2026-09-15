@@ -314,9 +314,9 @@ object LrcLibClient {
         if (requestedTitleVersions == candidateTitleVersions) return true
 
         val requestedContext = requestedTitleVersions +
-            extractVersionQualifiers(requestedAlbum, instrumental = false)
+            extractAlbumVersionQualifiers(requestedAlbum)
         val candidateContext = candidateTitleVersions +
-            extractVersionQualifiers(candidateAlbum, instrumental = false)
+            extractAlbumVersionQualifiers(candidateAlbum)
         return requestedContext.isNotEmpty() && requestedContext == candidateContext
     }
 
