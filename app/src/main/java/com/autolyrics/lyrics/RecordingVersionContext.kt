@@ -25,7 +25,7 @@ private val ENGLISH_VERSION_TOKEN = Regex(
 private val CONTEXT_TOKEN = Regex("""[\p{L}\p{N}]+""")
 private val ENGLISH_ORDINAL_TOKEN = Regex("""\d+(?:st|nd|rd|th)""", RegexOption.IGNORE_CASE)
 private val JAPANESE_VERSION_CONTEXT = Regex(
-    """^\s*(?:(?:\d{4}年?|\d+\s*周年)\s*)?$JAPANESE_VERSION_MARKER(?:\s*(?:記念|エディション))?\s*$"""
+    """^\s*(?:(?:\d{4}年?|\d+\s*周年)\s*)?$JAPANESE_VERSION_MARKER(?:\s*[・･/+＆&]\s*$JAPANESE_VERSION_MARKER)*(?:\s*(?:記念|エディション))?\s*$"""
 )
 private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
     "live",
