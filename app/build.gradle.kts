@@ -121,19 +121,18 @@ dependencies {
 
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // JSON
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // Color extraction from album art
+    implementation("androidx.palette:palette-ktx:1.0.0")
+
+    // ML Kit — on-device language detection & translation
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation("com.google.mlkit:translate:17.0.3")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Palette / colors
-    implementation("androidx.palette:palette-ktx:1.0.0")
-
-    // On-device translation
-    implementation("com.google.mlkit:language-id:17.0.6")
-    implementation("com.google.mlkit:translate:17.0.3")
-
+    // Unit tests for lyric candidate matching heuristics and provider parsers
     testImplementation("junit:junit:4.13.2")
 }
