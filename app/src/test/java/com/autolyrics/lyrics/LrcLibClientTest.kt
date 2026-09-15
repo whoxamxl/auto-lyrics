@@ -51,6 +51,36 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun albumVersionEvidenceCanCorroborateCandidateTitle() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Live at Wembley"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (Remastered)"
+            )
+        )
+    }
+
+    @Test
+    fun albumVersionEvidenceStillRejectsDifferentRecording() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Studio Album",
+                candidateAlbum = "Live at Wembley"
+            )
+        )
+    }
+
+    @Test
     fun differentLiveLabelsRemainCompatible() {
         assertTrue(LrcLibClient.versionsCompatible("Song (Live at Wembley)", "Song - Live"))
     }
