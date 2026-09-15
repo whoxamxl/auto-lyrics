@@ -69,6 +69,17 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun ordinaryAlbumNameContainingLiveIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Live Through This"
+            )
+        )
+    }
+
+    @Test
     fun matchingTitleVersionsIgnoreExtraAlbumEditionMarker() {
         assertTrue(
             LrcLibClient.versionsCompatible(
