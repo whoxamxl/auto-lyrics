@@ -108,12 +108,20 @@ git push origin main
 
 Do not create the tag manually when using this path.
 
+Before pushing, verify that `vX.Y.Z` is unused:
+
+```powershell
+git ls-remote --tags origin refs/tags/vX.Y.Z
+```
+
+This command should print nothing. Release CI performs the same remote-tag check and fails before building/publishing if the derived tag already exists.
+
 ### 4. Verify CI
 
 The release job should:
 
 1. read `versionName`,
-2. validate release version/tag consistency,
+2. validate release version/tag consistency and reject tag reuse,
 3. validate PetitLyrics secrets,
 4. validate release-signing secrets,
 5. create the temporary release keystore,
