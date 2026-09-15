@@ -140,6 +140,24 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun japaneseCompoundAlbumVersionSuffixesAreRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ・リマスター）",
+                requestedAlbum = "アルバム: ライブ版: リマスター版"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム: ライブ版: サブタイトル"
+            )
+        )
+    }
+
+    @Test
     fun ordinaryAlbumNameContainingLiveIsNotVersionEvidence() {
         assertFalse(
             LrcLibClient.versionsCompatible(
