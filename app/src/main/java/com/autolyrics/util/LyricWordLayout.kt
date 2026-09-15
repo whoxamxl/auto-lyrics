@@ -147,16 +147,21 @@ object LyricWordLayout {
         if (token.isEmpty() || startIndex >= text.length) return null
 
         val exactIndex = text.indexOf(token, startIndex = startIndex)
-        if (exactIndex >= 0) {
-            return TokenSpan(exactIndex, exactIndex + token.length)
+        val exactSpan = if (exactIndex >= 0) {
+            TokenSpan(exactIndex, exactIndex + token.length)
+        } else {
+            null
         }
 
         val caseInsensitiveIndex = text.indexOf(token, startIndex = startIndex, ignoreCase = true)
-        if (caseInsensitiveIndex >= 0) {
-            return TokenSpan(caseInsensitiveIndex, caseInsensitiveIndex + token.length)
+        val caseInsensitiveSpan = if (caseInsensitiveIndex >= 0) {
+            TokenSpan(caseInsensitiveIndex, caseInsensitiveIndex + token.length)
+        } else {
+            null
         }
 
         val normalizedToken = normalizeForAlignment(token)
+        var normalizedSpan: TokenSpan? = null
         for (candidateStart in startIndex until text.length) {
             val maxEnd = minOf(
                 text.length,
@@ -164,12 +169,18 @@ object LyricWordLayout {
             )
             for (candidateEnd in (candidateStart + 1)..maxEnd) {
                 if (normalizeForAlignment(text.substring(candidateStart, candidateEnd)) == normalizedToken) {
-                    return TokenSpan(candidateStart, candidateEnd)
+                    normalizedSpan = TokenSpan(candidateStart, candidateEnd)
+                    break
                 }
             }
+            if (normalizedSpan != null) break
         }
 
-        return null
+        // Sequential karaoke alignment cares about source order first. A later
+        // exact-case occurrence must not beat an earlier case/normalization-
+        // equivalent occurrence, otherwise repeated words can shift by one token.
+        return listOfNotNull(exactSpan, caseInsensitiveSpan, normalizedSpan)
+            .minByOrNull { it.start }
     }
 
     private fun normalizeForAlignment(text: String): String =
