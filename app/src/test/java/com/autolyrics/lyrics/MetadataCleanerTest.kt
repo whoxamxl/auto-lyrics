@@ -13,6 +13,10 @@ class MetadataCleanerTest {
     @Test
     fun preservesLiveMarkerInsidePresentationLabel() {
         assertEquals("Song (Live)", MetadataCleaner.cleanTitle("Song (Official Live Video)"))
+        assertEquals(
+            "Song (Live)",
+            MetadataCleaner.cleanTitle("Song (Official Live Performance Video)")
+        )
     }
 
     @Test
