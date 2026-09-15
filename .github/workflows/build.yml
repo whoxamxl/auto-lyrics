@@ -1,4 +1,4 @@
-name: Build APK
+name: Build OpenAutoLyrics APK
 
 on:
   push:
@@ -16,11 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # A normal tag push remains the standard release path. A main-branch commit
-      # named "Release vX.Y.Z" is also allowed to create the matching tag/release;
-      # this keeps the release operation atomic with the version bump.
+      # named "Release vX.Y.Z" is also allowed to create the matching tag/release.
       IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v')) }}
-      # Keep provider identifiers out of ordinary PR/main artifacts. They are
-      # injected only into release builds.
+      # Provider identifiers are injected only into release builds.
       PETITLYRICS_USER_ID: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_USER_ID || '' }}
       PETITLYRICS_APP_NAME: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_APP_NAME || '' }}
       PETITLYRICS_PKG_NAME: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v'))) && secrets.PETITLYRICS_PKG_NAME || '' }}
@@ -78,6 +76,46 @@ jobs:
             exit 1
           fi
 
+      - name: Validate release signing secrets
+        if: env.IS_RELEASE == 'true'
+        shell: bash
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.OPENAUTOLYRICS_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.OPENAUTOLYRICS_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.OPENAUTOLYRICS_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.OPENAUTOLYRICS_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for name in \
+            SIGNING_KEYSTORE_BASE64 \
+            SIGNING_STORE_PASSWORD \
+            SIGNING_KEY_ALIAS \
+            SIGNING_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required OpenAutoLyrics signing secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Prepare release signing key
+        if: env.IS_RELEASE == 'true'
+        shell: bash
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.OPENAUTOLYRICS_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.OPENAUTOLYRICS_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.OPENAUTOLYRICS_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.OPENAUTOLYRICS_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/openautolyrics-release.p12"
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          echo "RELEASE_STORE_FILE=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "RELEASE_STORE_PASSWORD=$SIGNING_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Run unit tests
         run: gradle testDebugUnitTest
 
@@ -114,13 +152,13 @@ jobs:
             SOURCE=app/build/outputs/apk/debug/app-debug.apk
           fi
           cp "$SOURCE" \
-             "app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk"
+             "app/build/outputs/distribution/OpenAutoLyrics-${{ steps.version.outputs.name }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: auto-lyrics-${{ steps.version.outputs.name }}
-          path: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
+          name: OpenAutoLyrics-${{ steps.version.outputs.name }}
+          path: app/build/outputs/distribution/OpenAutoLyrics-${{ steps.version.outputs.name }}.apk
 
       - name: Create Release
         if: env.IS_RELEASE == 'true'
@@ -129,7 +167,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.name }}
           target_commitish: ${{ github.sha }}
           name: v${{ steps.version.outputs.name }}
-          files: app/build/outputs/distribution/auto-lyrics-${{ steps.version.outputs.name }}.apk
+          files: app/build/outputs/distribution/OpenAutoLyrics-${{ steps.version.outputs.name }}.apk
           generate_release_notes: true
 
   windows-regression:
