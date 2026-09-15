@@ -683,6 +683,9 @@ class MediaTracker private constructor(context: Context) {
 
     private fun handleKaraokePreferenceChanged() {
         val track = _state.value.track ?: return
+        translationJob?.cancel()
+        LyricsTranslator.resetUiState()
+        _state.value = clearTranslationForLyricsVariantSwitch(_state.value)
         fetchLyrics(track)
     }
 

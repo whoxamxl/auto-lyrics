@@ -1,6 +1,7 @@
 package com.autolyrics.lyrics
 
 import com.autolyrics.model.TrackInfo
+import com.google.gson.annotations.SerializedName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -14,6 +15,33 @@ class SyncLrcClientTest {
         album = "Example Album",
         durationMs = 180_000L
     )
+
+    @Test
+    fun apiResponseFieldsHaveStableSerializedNames() {
+        val expected = mapOf(
+            "karaoke" to "karaoke",
+            "synced" to "synced",
+            "plain" to "plain",
+            "lyrics" to "lyrics",
+            "type" to "type",
+            "id" to "id",
+            "track" to "track",
+            "artist" to "artist",
+            "album" to "album",
+            "duration" to "duration",
+            "instrumental" to "instrumental"
+        )
+
+        val actual = SyncLrcClient.ApiResponse::class.java.declaredFields
+            .filterNot { it.isSynthetic }
+            .associate { field ->
+                field.name to field.getAnnotation(SerializedName::class.java)?.value
+            }
+
+        expected.forEach { (fieldName, jsonName) ->
+            assertEquals(jsonName, actual[fieldName])
+        }
+    }
 
     @Test
     fun acceptsCurrentPublicKaraokeFieldResponse() {

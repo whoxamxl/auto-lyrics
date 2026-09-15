@@ -51,6 +51,254 @@ class LrcLibClientTest {
     }
 
     @Test
+    fun albumVersionEvidenceCanCorroborateCandidateTitle() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Live at Wembley"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Live"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Subtitle: Live"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album: Live: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Live Through This: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (Remastered)"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (Deluxe Remastered Edition)"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album (20th Anniversary Remastered Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun albumEvidenceDoesNotEraseExplicitTitleVersionConflict() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live)",
+                candidateTitle = "Song (Remastered)",
+                requestedAlbum = "Album (Live Remastered Edition)",
+                candidateAlbum = "Album (Live Remastered Edition)"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live)",
+                candidateTitle = "Song (Live Remastered)",
+                requestedAlbum = "Album (Remastered Edition)",
+                candidateAlbum = "Album (Remastered Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun explicitVersionSegmentBeforeOrdinaryTrailingSubtitleIsNotEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Live: Subtitle"
+            )
+        )
+    }
+
+    @Test
+    fun japaneseAnniversaryRemasterEvidenceIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名（リマスター）",
+                candidateTitle = "曲名",
+                candidateAlbum = "アルバム（20周年リマスター版）"
+            )
+        )
+    }
+
+    @Test
+    fun japaneseCompoundAlbumVersionSuffixesAreRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ・リマスター）",
+                requestedAlbum = "アルバム: ライブ版: リマスター版"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ・リマスター）",
+                requestedAlbum = "ライブ版: リマスター版"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム: ライブ版: サブタイトル"
+            )
+        )
+    }
+
+    @Test
+    fun ordinaryAlbumNameContainingLiveIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Live Through This"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album - Live Through This"
+            )
+        )
+    }
+
+    @Test
+    fun ordinaryBracketedAlbumSubtitleContainingLiveIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album (We Live Here)"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album (We Live Here — Deluxe Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun mixedScriptProseAroundEnglishMarkerIsNotVersionEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - LIVE・ドア"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム（LIVE・ドア）"
+            )
+        )
+    }
+
+    @Test
+    fun fullWidthAlbumVersionPunctuationIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム（ライブ）"
+            )
+        )
+    }
+
+    @Test
+    fun japaneseAlbumVersionSuffixIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブ版"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブバージョン"
+            )
+        )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブドア"
+            )
+        )
+    }
+
+    @Test
+    fun matchingTitleVersionsIgnoreExtraAlbumEditionMarker() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song",
+                requestedAlbum = "Album",
+                candidateAlbum = "Album (Remastered)"
+            )
+        )
+    }
+
+    @Test
+    fun albumVersionEvidenceStillRejectsDifferentRecording() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Studio Album",
+                candidateAlbum = "Live at Wembley"
+            )
+        )
+    }
+
+    @Test
     fun differentLiveLabelsRemainCompatible() {
         assertTrue(LrcLibClient.versionsCompatible("Song (Live at Wembley)", "Song - Live"))
     }
