@@ -2,6 +2,7 @@ package com.autolyrics.util
 
 import com.autolyrics.model.LyricLine
 import java.text.BreakIterator
+import java.text.Normalizer
 import java.util.Locale
 
 /**
@@ -24,6 +25,12 @@ object LyricWordLayout {
     internal data class DisplayRange(
         val start: Int,
         val end: Int
+    )
+
+    internal data class RenderedLine(
+        val text: String,
+        val tokenStart: IntArray,
+        val tokenEnd: IntArray
     )
 
     private data class TokenSpan(
@@ -56,6 +63,40 @@ object LyricWordLayout {
         )
     }
 
+    /**
+     * Returns the text/ranges a visual karaoke renderer should use. Credibly
+     * aligned payloads keep the provider's source line verbatim and map timing
+     * tokens onto readable lexical ranges. Unrelated payloads retain the legacy
+     * provider-token reconstruction instead of inventing ranges on the source.
+     */
+    internal fun renderedLine(line: LyricLine): RenderedLine {
+        if (line.words.isEmpty()) {
+            return RenderedLine(line.text, IntArray(0), IntArray(0))
+        }
+
+        val displayRanges = displayRangesForLine(line)
+        if (displayRanges != null) {
+            return RenderedLine(
+                text = line.text,
+                tokenStart = IntArray(displayRanges.size) { displayRanges[it].start },
+                tokenEnd = IntArray(displayRanges.size) { displayRanges[it].end }
+            )
+        }
+
+        val wordLayout = layout(line)
+        val builder = StringBuilder()
+        val starts = IntArray(line.words.size)
+        val ends = IntArray(line.words.size)
+        line.words.forEachIndexed { index, word ->
+            builder.append(wordLayout.prefixes.getOrElse(index) { "" })
+            starts[index] = builder.length
+            builder.append(word.text)
+            ends[index] = builder.length
+        }
+        builder.append(wordLayout.suffix)
+        return RenderedLine(builder.toString(), starts, ends)
+    }
+
     fun karaokeText(
         line: LyricLine,
         activeWordIndex: Int,
@@ -76,8 +117,8 @@ object LyricWordLayout {
             }
         }
 
-        // Conservative compatibility fallback for provider payloads whose token
-        // strings cannot be aligned with the provider's full line text.
+        // Conservative compatibility fallback for provider payloads that are not
+        // sufficiently related to the visible source line.
         val layout = layout(line)
         return buildString {
             words.forEachIndexed { index, word ->
@@ -94,15 +135,41 @@ object LyricWordLayout {
      * Returns the human-readable character range that should be highlighted for
      * a provider timing token. The range is expressed against [LyricLine.text]
      * with an exclusive [DisplayRange.end].
-     *
-     * This is internal so renderers can share the exact same grouping logic as
-     * [karaokeText] without exposing timing/display coupling as public API.
      */
-    internal fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): DisplayRange? {
-        val tokenSpans = locateTokens(line) ?: return null
-        val token = tokenSpans.getOrNull(activeTokenIndex) ?: return null
+    internal fun displayRangeForToken(line: LyricLine, activeTokenIndex: Int): DisplayRange? =
+        displayRangesForLine(line)?.getOrNull(activeTokenIndex)
+
+    /**
+     * Returns readable ranges for every timing token only when the timing payload
+     * has enough evidence that it belongs to [LyricLine.text]. This prevents a
+     * small number of incidental substring matches from replacing the legacy
+     * compatibility path.
+     */
+    internal fun displayRangesForLine(line: LyricLine): List<DisplayRange>? {
+        if (line.words.isEmpty()) return emptyList()
         val ranges = lexicalRanges(line.text)
         if (ranges.isEmpty()) return null
+
+        val tokenSpans = locateTokensBestEffort(line)
+        if (!hasCredibleAlignment(line, tokenSpans)) return null
+
+        val result = ArrayList<DisplayRange>(line.words.size)
+        line.words.indices.forEach { tokenIndex ->
+            result += mapDisplayRange(line, tokenIndex, ranges, tokenSpans) ?: return null
+        }
+        return result
+    }
+
+    private fun mapDisplayRange(
+        line: LyricLine,
+        activeTokenIndex: Int,
+        ranges: List<DisplayRange>,
+        tokenSpans: List<TokenSpan?>
+    ): DisplayRange? {
+        val token = tokenSpans.getOrNull(activeTokenIndex)
+        if (token == null) {
+            return fallbackDisplayRange(line, activeTokenIndex, ranges, tokenSpans)
+        }
 
         ranges.firstOrNull { range ->
             token.start < range.end && token.end > range.start
@@ -117,19 +184,133 @@ object LyricWordLayout {
         )
     }
 
-    private fun locateTokens(line: LyricLine): List<TokenSpan>? {
-        val spans = ArrayList<TokenSpan>(line.words.size)
+    private fun locateTokensBestEffort(line: LyricLine): List<TokenSpan?> {
+        val spans = MutableList<TokenSpan?>(line.words.size) { null }
         var cursor = 0
 
-        for (word in line.words) {
-            if (word.text.isEmpty()) return null
-            val index = line.text.indexOf(word.text, startIndex = cursor)
-            if (index < 0) return null
-            spans += TokenSpan(index, index + word.text.length)
-            cursor = index + word.text.length
+        line.words.forEachIndexed { index, word ->
+            val span = findTokenSpan(line.text, word.text, cursor) ?: return@forEachIndexed
+            spans[index] = span
+            cursor = span.end
         }
 
         return spans
+    }
+
+    private fun findTokenSpan(text: String, token: String, startIndex: Int): TokenSpan? {
+        if (token.isEmpty() || startIndex >= text.length) return null
+
+        val exactIndex = text.indexOf(token, startIndex = startIndex)
+        val exactSpan = if (exactIndex >= 0) {
+            TokenSpan(exactIndex, exactIndex + token.length)
+        } else {
+            null
+        }
+
+        val caseInsensitiveIndex = text.indexOf(token, startIndex = startIndex, ignoreCase = true)
+        val caseInsensitiveSpan = if (caseInsensitiveIndex >= 0) {
+            TokenSpan(caseInsensitiveIndex, caseInsensitiveIndex + token.length)
+        } else {
+            null
+        }
+
+        val normalizedToken = normalizeForAlignment(token)
+        var normalizedSpan: TokenSpan? = null
+        for (candidateStart in startIndex until text.length) {
+            val maxEnd = minOf(
+                text.length,
+                candidateStart + token.length + NORMALIZATION_SLACK_CHARS
+            )
+            for (candidateEnd in (candidateStart + 1)..maxEnd) {
+                if (normalizeForAlignment(text.substring(candidateStart, candidateEnd)) == normalizedToken) {
+                    normalizedSpan = TokenSpan(candidateStart, candidateEnd)
+                    break
+                }
+            }
+            if (normalizedSpan != null) break
+        }
+
+        // Sequential karaoke alignment cares about source order first. A later
+        // exact-case occurrence must not beat an earlier case/normalization-
+        // equivalent occurrence, otherwise repeated words can shift by one token.
+        return listOfNotNull(exactSpan, caseInsensitiveSpan, normalizedSpan)
+            .minByOrNull { it.start }
+    }
+
+    private fun hasCredibleAlignment(line: LyricLine, tokenSpans: List<TokenSpan?>): Boolean {
+        if (line.words.isEmpty()) return false
+
+        val sourceCanonical = canonicalContent(line.text)
+        val timingCanonical = canonicalContent(line.words.joinToString(separator = "") { it.text })
+        if (sourceCanonical.isNotEmpty() && sourceCanonical == timingCanonical) return true
+        if (sourceCanonical.isEmpty() || timingCanonical.isEmpty() || line.words.size == 1) return false
+
+        val alignedIndices = line.words.indices.filter { tokenSpans.getOrNull(it) != null }
+        if (alignedIndices.size < MIN_PARTIAL_ANCHORS) return false
+
+        // Count substantive canonical characters rather than token hits. This
+        // prevents unrelated fine-grained payloads such as [A, X, G, Z] from
+        // being accepted merely because one-letter substrings happen to occur in
+        // the source. Sequential matching guarantees these covered spans do not
+        // overlap or reorder.
+        val alignedCanonicalChars = alignedIndices.sumOf { index ->
+            canonicalContent(line.words[index].text).length
+        }
+        if (alignedCanonicalChars == 0) return false
+
+        return alignedCanonicalChars * MIN_COVERAGE_DENOMINATOR >=
+            sourceCanonical.length * MIN_COVERAGE_NUMERATOR &&
+            alignedCanonicalChars * MIN_COVERAGE_DENOMINATOR >=
+            timingCanonical.length * MIN_COVERAGE_NUMERATOR
+    }
+
+    private fun normalizeForAlignment(text: String): String =
+        Normalizer.normalize(text, Normalizer.Form.NFC).lowercase(Locale.ROOT)
+
+    private fun canonicalContent(text: String): String =
+        normalizeForAlignment(text).filter { it.isLetterOrDigit() }
+
+    private fun fallbackDisplayRange(
+        line: LyricLine,
+        activeTokenIndex: Int,
+        ranges: List<DisplayRange>,
+        tokenSpans: List<TokenSpan?>
+    ): DisplayRange? {
+        if (activeTokenIndex !in line.words.indices || ranges.isEmpty()) return null
+        if (line.words.size == 1) {
+            return DisplayRange(ranges.first().start, ranges.last().end)
+        }
+
+        val previousIndex = (activeTokenIndex - 1 downTo 0)
+            .firstOrNull { tokenSpans[it] != null }
+        val nextIndex = (activeTokenIndex + 1..line.words.lastIndex)
+            .firstOrNull { tokenSpans[it] != null }
+        val blockStartIndex = (previousIndex ?: -1) + 1
+        val blockEndIndex = (nextIndex ?: line.words.size) - 1
+        val intervalStart = tokenSpans.getOrNull(previousIndex ?: -1)?.end
+            ?: ranges.first().start
+        val intervalEnd = tokenSpans.getOrNull(nextIndex ?: tokenSpans.size)?.start
+            ?: ranges.last().end
+
+        // Only the unaligned block is estimated. Successfully aligned neighbors
+        // remain anchors, so a single case/punctuation/normalization mismatch does
+        // not redistribute the surrounding syllable timing across later words.
+        val tokenLengths = (blockStartIndex..blockEndIndex).map { index ->
+            line.words[index].text.length.coerceAtLeast(1)
+        }
+        val totalLength = tokenLengths.sum().coerceAtLeast(1)
+        val activeOffset = activeTokenIndex - blockStartIndex
+        val consumedBefore = tokenLengths.take(activeOffset).sum()
+        val tokenMidpoint = consumedBefore + tokenLengths[activeOffset] / 2f
+        val fraction = (tokenMidpoint / totalLength).coerceIn(0f, 1f)
+        val start = intervalStart.toFloat()
+        val end = intervalEnd.coerceAtLeast(intervalStart).toFloat()
+        val target = start + (end - start) * fraction
+
+        return ranges.minWithOrNull(
+            compareBy<DisplayRange> { pointDistance(target, it) }
+                .thenBy { if (it.end.toFloat() <= target) 0 else 1 }
+        )
     }
 
     private fun lexicalRanges(text: String): List<DisplayRange> {
@@ -181,6 +362,14 @@ object LyricWordLayout {
         }
     }
 
+    private fun pointDistance(point: Float, range: DisplayRange): Float {
+        return when {
+            point < range.start -> range.start - point
+            point > range.end -> point - range.end
+            else -> 0f
+        }
+    }
+
     private fun fallback(line: LyricLine): Layout {
         val separator = if (line.text.any { it.isWhitespace() }) " " else ""
         return Layout(
@@ -190,4 +379,9 @@ object LyricWordLayout {
             suffix = ""
         )
     }
+
+    private const val NORMALIZATION_SLACK_CHARS = 4
+    private const val MIN_PARTIAL_ANCHORS = 2
+    private const val MIN_COVERAGE_NUMERATOR = 1
+    private const val MIN_COVERAGE_DENOMINATOR = 2
 }

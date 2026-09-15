@@ -47,4 +47,151 @@ class LyricWordDisplayRangeTest {
             LyricWordLayout.displayRangeForToken(line, 5)
         )
     }
+
+    @Test
+    fun mismatchedTokenCaseAlignsWithoutDroppingKaraoke() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(
+                LyricWord(1_000L, "HELLO"),
+                LyricWord(1_500L, "WORLD")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(0, 5),
+            LyricWordLayout.displayRangeForToken(line, 0)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(6, 11),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+    }
+
+    @Test
+    fun repeatedTokensPreferEarliestEquivalentMatch() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello HELLO",
+            words = listOf(
+                LyricWord(1_000L, "HELLO"),
+                LyricWord(1_500L, "HELLO")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(0, 5),
+            LyricWordLayout.displayRangeForToken(line, 0)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(6, 11),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+    }
+
+    @Test
+    fun unevenCaseMismatchesUseActualLexicalPositions() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "extraordinary a b c d e",
+            words = listOf(
+                LyricWord(1_000L, "EXTRAORDINARY"),
+                LyricWord(1_500L, "A"),
+                LyricWord(1_600L, "B"),
+                LyricWord(1_700L, "C"),
+                LyricWord(1_800L, "D"),
+                LyricWord(1_900L, "E")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(14, 15),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(16, 17),
+            LyricWordLayout.displayRangeForToken(line, 2)
+        )
+    }
+
+    @Test
+    fun fragmentedMismatchedTokensStayOnTheirReadableWord() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(
+                LyricWord(1_000L, "HE"),
+                LyricWord(1_150L, "LLO"),
+                LyricWord(1_500L, "WORLD")
+            )
+        )
+
+        val hello = LyricWordLayout.DisplayRange(0, 5)
+        assertEquals(hello, LyricWordLayout.displayRangeForToken(line, 0))
+        assertEquals(hello, LyricWordLayout.displayRangeForToken(line, 1))
+        assertEquals(
+            LyricWordLayout.DisplayRange(6, 11),
+            LyricWordLayout.displayRangeForToken(line, 2)
+        )
+    }
+
+    @Test
+    fun onePunctuationMismatchKeepsNeighboringSyllableGrouping() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Provider timing works",
+            words = listOf(
+                LyricWord(1_000L, "Pro"),
+                LyricWord(1_100L, "vi"),
+                LyricWord(1_200L, "der!"),
+                LyricWord(1_500L, "timing"),
+                LyricWord(2_000L, "works")
+            )
+        )
+
+        val provider = LyricWordLayout.DisplayRange(0, 8)
+        assertEquals(provider, LyricWordLayout.displayRangeForToken(line, 0))
+        assertEquals(provider, LyricWordLayout.displayRangeForToken(line, 1))
+        assertEquals(provider, LyricWordLayout.displayRangeForToken(line, 2))
+        assertEquals(
+            LyricWordLayout.DisplayRange(9, 15),
+            LyricWordLayout.displayRangeForToken(line, 3)
+        )
+    }
+
+    @Test
+    fun canonicallyEquivalentTokenAlignsToOriginalTextRange() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "café noir",
+            words = listOf(
+                LyricWord(1_000L, "cafe\u0301"),
+                LyricWord(1_500L, "noir")
+            )
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(0, 4),
+            LyricWordLayout.displayRangeForToken(line, 0)
+        )
+        assertEquals(
+            LyricWordLayout.DisplayRange(5, 9),
+            LyricWordLayout.displayRangeForToken(line, 1)
+        )
+    }
+
+    @Test
+    fun singleMismatchedTokenFallsBackToWholeVisibleLine() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(LyricWord(1_000L, "HELLO WORLD!"))
+        )
+
+        assertEquals(
+            LyricWordLayout.DisplayRange(0, 11),
+            LyricWordLayout.displayRangeForToken(line, 0)
+        )
+    }
 }

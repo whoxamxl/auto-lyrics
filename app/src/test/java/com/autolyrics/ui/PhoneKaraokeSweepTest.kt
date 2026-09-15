@@ -29,6 +29,28 @@ class PhoneKaraokeSweepTest {
     }
 
     @Test
+    fun mismatchedProviderTokensStillProduceSweepSegments() {
+        val line = LyricLine(
+            timeMs = 1_000L,
+            text = "Hello world",
+            words = listOf(
+                LyricWord(1_000L, "HELLO", endTimeMs = 1_400L),
+                LyricWord(1_500L, "WORLD", endTimeMs = 2_000L)
+            )
+        )
+
+        val first = PhoneKaraokeSweep.segmentAtPosition(line, 1_200L)
+        assertNotNull(first)
+        assertEquals(0, first!!.start)
+        assertEquals(5, first.end)
+
+        val second = PhoneKaraokeSweep.segmentAtPosition(line, 1_700L)
+        assertNotNull(second)
+        assertEquals(6, second!!.start)
+        assertEquals(11, second.end)
+    }
+
+    @Test
     fun animationStopsAtExplicitEndUntilNextWordStarts() {
         val line = LyricLine(
             timeMs = 1_000L,
