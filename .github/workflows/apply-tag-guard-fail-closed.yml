@@ -1,0 +1,59 @@
+name: Harden release tag guard
+
+on:
+  push:
+    branches:
+      - standalone-prep
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: standalone-prep
+      - name: Harden remote tag lookup
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/build.yml')
+          text = p.read_text()
+          old = '''          elif git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $EXPECTED_TAG" >&2
+            echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
+            exit 1
+          fi
+'''
+          new = '''          else
+            set +e
+            git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED_TAG" >/dev/null 2>&1
+            TAG_LOOKUP_STATUS=$?
+            set -e
+            if [[ "$TAG_LOOKUP_STATUS" -eq 0 ]]; then
+              echo "Release tag already exists: $EXPECTED_TAG" >&2
+              echo "Bump versionName/versionCode instead of replacing assets on an older tag." >&2
+              exit 1
+            elif [[ "$TAG_LOOKUP_STATUS" -ne 2 ]]; then
+              echo "Unable to verify whether release tag exists: $EXPECTED_TAG (git ls-remote exit $TAG_LOOKUP_STATUS)" >&2
+              exit "$TAG_LOOKUP_STATUS"
+            fi
+          fi
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one tag guard match, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          Path('.github/workflows/apply-tag-guard-fail-closed.yml').unlink()
+          PY
+      - name: Commit hardened tag guard
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fail closed on release tag lookup errors"
+          git push origin HEAD:standalone-prep
