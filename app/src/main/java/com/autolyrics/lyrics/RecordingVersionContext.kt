@@ -14,6 +14,10 @@ private val LIVE_LOCATION_CONTEXT = Regex(
     """^\s*(?:live|ライブ)\s+(?:at|from|in)\b.*$""",
     RegexOption.IGNORE_CASE
 )
+private val NAMED_REMIX_TITLE_CONTEXT = Regex(
+    """^\s*.+\s+remix\s*$""",
+    RegexOption.IGNORE_CASE
+)
 private val ENGLISH_VERSION_TOKEN = Regex(
     """\b$ENGLISH_VERSION_MARKER\b""",
     RegexOption.IGNORE_CASE
@@ -77,6 +81,8 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
 /**
  * Extract title version qualifiers only from explicit title-version syntax.
  * Ordinary title words such as "Live" in "Live Forever" are not version evidence.
+ * Named remix labels such as "(Seeb Remix)" are explicit because the arbitrary
+ * remixer name appears inside version syntax rather than in the base title.
  */
 internal fun extractTitleVersionQualifiers(
     value: String,
@@ -90,13 +96,20 @@ internal fun extractTitleVersionQualifiers(
     val contexts = buildList {
         BRACKETED_VERSION_CONTEXT.findAll(normalized).forEach { match ->
             val inner = match.value.substring(1, match.value.length - 1).trim()
-            trailingExplicitVersionContext(inner)?.let(::add)
+            trailingExplicitVersionContext(
+                value = inner,
+                classifier = ::isExplicitTitleVersionContext
+            )?.let(::add)
         }
 
         // Unlike album metadata, a whole title that happens to be "Live" or
         // "Remix" is still a legitimate song title. Only a separator suffix is
         // accepted outside brackets.
-        trailingExplicitVersionContext(normalized, allowWholeContext = false)?.let(::add)
+        trailingExplicitVersionContext(
+            value = normalized,
+            allowWholeContext = false,
+            classifier = ::isExplicitTitleVersionContext
+        )?.let(::add)
     }
 
     return buildSet {
@@ -126,11 +139,12 @@ internal fun extractTitleVersionQualifiers(
  */
 private fun trailingExplicitVersionContext(
     value: String,
-    allowWholeContext: Boolean = true
+    allowWholeContext: Boolean = true,
+    classifier: (String) -> Boolean = ::isExplicitVersionContext
 ): String? {
     val text = value.trim()
     if (text.isBlank()) return null
-    if (allowWholeContext && isExplicitVersionContext(text)) return text
+    if (allowWholeContext && classifier(text)) return text
 
     val separatorMatches = VERSION_SEPARATOR.findAll(text).toList()
     if (separatorMatches.isEmpty()) return null
@@ -143,18 +157,28 @@ private fun trailingExplicitVersionContext(
     }
     segments += text.substring(start).trim()
 
-    if (segments.size < 2 || !isExplicitVersionContext(segments.last())) return null
+    if (segments.size < 2 || !classifier(segments.last())) return null
 
     var firstVersionSegment = segments.lastIndex
     while (
         firstVersionSegment - 1 >= 0 &&
-        isExplicitVersionContext(segments[firstVersionSegment - 1])
+        classifier(segments[firstVersionSegment - 1])
     ) {
         firstVersionSegment--
     }
 
     return segments.subList(firstVersionSegment, segments.size)
         .joinToString(": ")
+}
+
+private fun isExplicitTitleVersionContext(value: String): Boolean {
+    val text = value.trim()
+    if (isExplicitVersionContext(text)) return true
+
+    // Named remixes conventionally put an arbitrary remixer name immediately
+    // before the terminal "Remix" marker. This relaxation is title-only and is
+    // therefore not used for album evidence, where arbitrary prose must stay strict.
+    return NAMED_REMIX_TITLE_CONTEXT.matches(text)
 }
 
 private fun isExplicitVersionContext(value: String): Boolean {
