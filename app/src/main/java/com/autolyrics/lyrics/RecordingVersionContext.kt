@@ -63,10 +63,10 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     val contexts = buildList {
         BRACKETED_ALBUM_CONTEXT.findAll(normalized).forEach { match ->
             val inner = match.value.substring(1, match.value.length - 1).trim()
-            longestExplicitVersionSuffix(inner)?.let(::add)
+            trailingExplicitVersionContext(inner)?.let(::add)
         }
 
-        longestExplicitVersionSuffix(normalized)?.let(::add)
+        trailingExplicitVersionContext(normalized)?.let(::add)
     }
 
     return contexts
@@ -75,35 +75,48 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
 }
 
 /**
- * Return the longest suffix that is wholly version-shaped.
+ * Return the longest trailing run of individually version-shaped segments.
  *
  * Examples:
  * - `Album: Subtitle: Live` -> `Live`
  * - `Album: Live: Remastered` -> `Live: Remastered`
+ * - `アルバム: ライブ版: リマスター版` -> `ライブ版: リマスター版`
  * - `Album: Live: Subtitle` -> null
  * - `Live Through This: Remastered` -> `Remastered`
  *
- * Starting from the right prevents ordinary prefix metadata from participating in
- * the decision, while extending left across consecutive version-shaped segments
- * preserves compound contexts such as Live + Remastered.
+ * Requiring the final segment to be version-shaped prevents a version-looking
+ * middle segment from leaking through ordinary trailing prose. Extending left only
+ * while each adjacent segment is independently explicit preserves compound labels
+ * across both English and Japanese metadata.
  */
-private fun longestExplicitVersionSuffix(value: String): String? {
+private fun trailingExplicitVersionContext(value: String): String? {
     val text = value.trim()
     if (text.isBlank()) return null
     if (isExplicitVersionContext(text)) return text
 
-    var best: String? = null
-    for (separator in VERSION_SEPARATOR.findAll(text).toList().asReversed()) {
-        val suffix = text.substring(separator.range.last + 1).trim()
-        if (suffix.isBlank()) continue
+    val separatorMatches = VERSION_SEPARATOR.findAll(text).toList()
+    if (separatorMatches.isEmpty()) return null
 
-        if (isExplicitVersionContext(suffix)) {
-            best = suffix
-        } else if (best != null) {
-            break
-        }
+    val segments = mutableListOf<String>()
+    var start = 0
+    separatorMatches.forEach { separator ->
+        segments += text.substring(start, separator.range.first).trim()
+        start = separator.range.last + 1
     }
-    return best
+    segments += text.substring(start).trim()
+
+    if (segments.size < 2 || !isExplicitVersionContext(segments.last())) return null
+
+    var firstVersionSegment = segments.lastIndex
+    while (
+        firstVersionSegment - 1 >= 1 &&
+        isExplicitVersionContext(segments[firstVersionSegment - 1])
+    ) {
+        firstVersionSegment--
+    }
+
+    return segments.subList(firstVersionSegment, segments.size)
+        .joinToString(": ")
 }
 
 private fun isExplicitVersionContext(value: String): Boolean {
