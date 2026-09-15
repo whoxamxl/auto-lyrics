@@ -9,7 +9,7 @@ private const val JAPANESE_VERSION_MARKER =
     "(?:ライブ|アコースティック|リミックス|リマスター|インストゥルメンタル|インスト|エディット|エクステンデッド|デモ)(?:版|盤|バージョン)?"
 
 private val BRACKETED_ALBUM_CONTEXT = Regex("""[\(\[].*?[\)\]]""")
-private val SEPARATOR_ALBUM_CONTEXT = Regex("""(?:\s[-–—]\s|:\s*)(.+)$""")
+private val VERSION_SEPARATOR = Regex("""\s[-–—]\s|:\s*""")
 private val LIVE_LOCATION_CONTEXT = Regex(
     """^\s*(?:live|ライブ)\s+(?:at|from|in)\b.*$""",
     RegexOption.IGNORE_CASE
@@ -19,8 +19,9 @@ private val ENGLISH_VERSION_TOKEN = Regex(
     RegexOption.IGNORE_CASE
 )
 private val CONTEXT_TOKEN = Regex("""[\p{L}\p{N}]+""")
+private val ENGLISH_ORDINAL_TOKEN = Regex("""\d+(?:st|nd|rd|th)""", RegexOption.IGNORE_CASE)
 private val JAPANESE_VERSION_CONTEXT = Regex(
-    """^\s*$JAPANESE_VERSION_MARKER\s*$"""
+    """^\s*(?:(?:\d{4}年?|\d+\s*周年)\s*)?$JAPANESE_VERSION_MARKER(?:\s*(?:記念|エディション))?\s*$"""
 )
 private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
     "live",
@@ -51,10 +52,9 @@ private val ALLOWED_ENGLISH_CONTEXT_WORDS = setOf(
 
 /**
  * Extract recording-version evidence from album metadata only when the marker is
- * presented as an explicit edition/version context. Bracketed labels, separator
- * suffixes and whole-album labels all use the same classifier so ordinary names
- * such as "Live Through This", "Album - Live Through This" and "We Live Here"
- * cannot become recording-version evidence merely because they contain `Live`.
+ * presented as an explicit edition/version context. Bracketed labels and each
+ * suffix segment after a conventional separator use the same classifier so
+ * ordinary names such as "Live Through This" cannot become version evidence.
  */
 internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
     if (value.isBlank()) return emptySet()
@@ -66,12 +66,15 @@ internal fun extractAlbumVersionQualifiers(value: String): Set<String> {
             if (isExplicitVersionContext(inner)) add(inner)
         }
 
-        SEPARATOR_ALBUM_CONTEXT.find(normalized)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.takeIf(::isExplicitVersionContext)
-            ?.let(::add)
+        // Inspect every suffix segment independently. This makes the final label in
+        // "Album: Subtitle: Live" visible without letting the ordinary album-name
+        // prefix participate as version evidence.
+        VERSION_SEPARATOR.split(normalized)
+            .drop(1)
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .filter(::isExplicitVersionContext)
+            .forEach(::add)
 
         if (isExplicitVersionContext(normalized)) add(normalized)
     }
@@ -97,8 +100,10 @@ private fun isExplicitVersionContext(value: String): Boolean {
         .toList()
     if (tokens.isEmpty()) return false
 
+    val anniversaryContext = "anniversary" in tokens
     return tokens.all { token ->
         token in ALLOWED_ENGLISH_CONTEXT_WORDS ||
-            token.toIntOrNull()?.let { it in 1900..2199 } == true
+            token.toIntOrNull()?.let { it in 1900..2199 } == true ||
+            (anniversaryContext && ENGLISH_ORDINAL_TOKEN.matches(token))
     }
 }
