@@ -95,6 +95,13 @@ class LrcLibClientTest {
                 requestedAlbum = "Album (We Live Here)"
             )
         )
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album (We Live Here — Deluxe Edition)"
+            )
+        )
     }
 
     @Test
@@ -104,6 +111,24 @@ class LrcLibClientTest {
                 requestedTitle = "曲名",
                 candidateTitle = "曲名（ライブ）",
                 requestedAlbum = "アルバム（ライブ）"
+            )
+        )
+    }
+
+    @Test
+    fun japaneseAlbumVersionSuffixIsRecognized() {
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブ版"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "曲名",
+                candidateTitle = "曲名（ライブ）",
+                requestedAlbum = "アルバム - ライブバージョン"
             )
         )
     }
