@@ -82,6 +82,20 @@ class LrcLibClientTest {
         )
         assertTrue(
             LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Live Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Album: Live: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song (Remastered)",
+                candidateTitle = "Song",
+                candidateAlbum = "Live Through This: Remastered"
+            )
+        )
+        assertTrue(
+            LrcLibClient.versionsCompatible(
                 requestedTitle = "Song (Remastered)",
                 candidateTitle = "Song",
                 candidateAlbum = "Album (Remastered)"
@@ -99,6 +113,17 @@ class LrcLibClientTest {
                 requestedTitle = "Song (Remastered)",
                 candidateTitle = "Song",
                 candidateAlbum = "Album (20th Anniversary Remastered Edition)"
+            )
+        )
+    }
+
+    @Test
+    fun explicitVersionSegmentBeforeOrdinaryTrailingSubtitleIsNotEvidence() {
+        assertFalse(
+            LrcLibClient.versionsCompatible(
+                requestedTitle = "Song",
+                candidateTitle = "Song (Live)",
+                requestedAlbum = "Album: Live: Subtitle"
             )
         )
     }
