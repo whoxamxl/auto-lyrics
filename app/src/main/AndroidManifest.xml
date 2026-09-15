@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
-        android:name=".AutoLyricsApp"
+        android:name="com.autolyrics.AutoLyricsApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -15,7 +15,7 @@
 
         <!-- Phone Activity -->
         <activity
-            android:name=".MainActivity"
+            android:name="com.autolyrics.MainActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.AutoLyrics">
@@ -27,13 +27,13 @@
 
         <!-- Performance / Karaoke Mode -->
         <activity
-            android:name=".PerformanceActivity"
+            android:name="com.autolyrics.PerformanceActivity"
             android:exported="false"
             android:theme="@style/Theme.AutoLyrics" />
 
         <!-- Notification Listener for Media Session access -->
         <service
-            android:name=".media.MediaListenerService"
+            android:name="com.autolyrics.media.MediaListenerService"
             android:exported="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
@@ -43,7 +43,7 @@
 
         <!-- Android Auto Media Browser Service -->
         <service
-            android:name=".auto.LyricsBrowserService"
+            android:name="com.autolyrics.auto.LyricsBrowserService"
             android:exported="true"
             android:label="Lyrics">
             <intent-filter>
@@ -53,7 +53,7 @@
 
         <!-- Start service on boot / app update so AA discovers it -->
         <receiver
-            android:name=".auto.BootReceiver"
+            android:name="com.autolyrics.auto.BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
